@@ -23,8 +23,13 @@ from safe_save import safe_download
 warnings.filterwarnings("ignore")
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
+import os
+os.environ.setdefault("SEOTAX_ENV", "nas")
+sys.path.insert(0, r"F:\종소세2026")
+from config import CUSTOMER_DIR, customer_folder as _customer_folder
+
 INPUT_XLSX = Path(r"F:\종소세2026\input\종소세신고도움서비스테스트.xlsx")
-PDF_BASE = Path(r"F:\종소세2026\output\PDF")
+PDF_BASE = CUSTOMER_DIR  # NAS: Z:\종소세2026\고객
 
 HOMETAX_MAIN = "https://hometax.go.kr"
 LOGIN_URL = (
@@ -363,7 +368,12 @@ def process_customer(ctx, page, customer):
     name = customer["name"]
     print(f"\n=== [{name}] ===")
 
-    folder = PDF_BASE / name
+    # NAS 고객 폴더 (성명_주민앞6 패턴)
+    folder_candidates = list(PDF_BASE.glob(f"{name}_*"))
+    if folder_candidates:
+        folder = folder_candidates[0]
+    else:
+        folder = PDF_BASE / name
     folder.mkdir(parents=True, exist_ok=True)
 
     # 1. 강제 로그아웃 (쿠키 클리어 포함)
@@ -429,9 +439,36 @@ def read_customers_with_credentials(xlsx_path=None):
     return out
 
 
+def get_no_pdf_names():
+    """NAS에서 PDF 없는 고객 이름 목록"""
+    no_pdf = set()
+    for folder in PDF_BASE.iterdir():
+        if not folder.is_dir():
+            continue
+        pdfs = list(folder.glob("종소세안내문_*.pdf")) + list(folder.glob("자료/종소세안내문_*.pdf"))
+        if not pdfs:
+            no_pdf.add(folder.name.split("_")[0])
+    return no_pdf
+
+
 def main():
-    customers = read_customers_with_credentials(INPUT_XLSX)
-    print(f"[Track B 대상] {len(customers)}명: {[c['name'] for c in customers]}")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", type=int, default=1, help="시작 번호 (1-based)")
+    parser.add_argument("--all", action="store_true", help="PDF없는 사람 필터 없이 전체 ID/PW보유자 처리")
+    args = parser.parse_args()
+
+    all_customers = read_customers_with_credentials(INPUT_XLSX)
+
+    if not args.all:
+        no_pdf = get_no_pdf_names()
+        customers = [c for c in all_customers if c["name"] in no_pdf]
+        print(f"[Track B] PDF없음 필터 후: {len(customers)}명 (전체 {len(all_customers)}명)")
+    else:
+        customers = all_customers
+
+    customers = customers[args.start - 1:]
+    print(f"[Track B 대상] {args.start}번부터 {len(customers)}명: {[c['name'] for c in customers]}")
 
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp("http://localhost:9222")
