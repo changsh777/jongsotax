@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+  <!-- 서비스 식별자 -->
+  <key>Label</key>
+  <string>com.taxeng.airtable_watcher</string>
+
+  <!-- 실행 명령 (python3 절대경로 필수) -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/changmini/NAS/종소세2026/airtable_watcher.py</string>
+  </array>
+
+  <!-- 환경변수: 텔레그램 봇 설정 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>BOT_TOKEN</key>
+    <string>여기에_봇_토큰_입력</string>
+    <key>ADMIN_CHAT_ID</key>
+    <string>여기에_채팅ID_입력</string>
+  </dict>
+
+  <!-- 로그인 시 자동 시작 -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- 크래시 시 자동 재시작 -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- 표준 출력 / 에러 로그 (스크립트 내부 로그와 별도) -->
+  <key>StandardOutPath</key>
+  <string>/Users/changmini/NAS/종소세2026/_로그/airtable_watcher_launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/changmini/NAS/종소세2026/_로그/airtable_watcher_launchd_err.log</string>
+
+  <!-- 작업 디렉터리 -->
+  <key>WorkingDirectory</key>
+  <string>/Users/changmini/NAS/종소세2026</string>
+
+</dict>
+</plist>

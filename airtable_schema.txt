@@ -1,0 +1,72 @@
+테이블: 종소세2026 (tbl2f2h6GfSnLCQpt)
+  Name / formula
+  고객구분 / singleSelect
+  성명 / singleLineText
+  핸드폰번호 / singleLineText
+  주민번호 / singleLineText
+  수임동의완료여부 / singleSelect
+  담당자 / singleSelect
+  수입 / currency
+  타소득여부 / singleSelect
+  장부유형 / singleSelect
+  할인가 / currency
+  수수료 / currency
+  입금액 / formula
+  자동입금 / formula
+  입금체크 / checkbox
+  자동회신 / singleSelect
+  발송관리 / singleSelect
+  소득세 / currency
+  소득납부 / singleSelect
+  지방세 / currency
+  지방납부 / singleSelect
+  홈택스아이디 / singleLineText
+  홈택스비번 / singleLineText
+  n8n / lastModifiedTime
+  Created / createdTime
+  last / lastModifiedTime
+  출력 / singleSelect
+  수입금액 / singleLineText
+  Field 33 / singleSelect
+  이메일발송 / checkbox
+  발송일자 / date
+  Field 50 / singleLineText
+  연결링크 2 / singleLineText
+  연결링크 3 / multipleRecordLinks
+  연결링크 / multipleRecordLinks
+  통합 / singleLineText
+  통합 2 / singleLineText
+  통합 3 / singleLineText
+  통합 4 / singleLineText
+  Created By / createdBy
+  자료접수 / multipleRecordLinks
+
+테이블: 자료접수 (tbl39rqc8msQc7xDX)
+  Name / formula
+  성명 / singleLineText
+  핸드폰번호 / singleLineText
+  주민번호 / singleLineText
+  담당 / singleSelect
+  비고 / singleSelect
+  특이사항 / singleLineText
+  종소세2023 / multipleRecordLinks
+  인적공제(부양가족) / singleSelect
+  추가공제 / multipleSelects
+  주소 / singleLineText
+  신용카드엑셀자료 / multipleAttachments
+  주민등록등본 / multipleAttachments
+  연말정산pdf / multipleAttachments
+  기타자료 / multipleAttachments
+  환급계좌 / singleLineText
+  은행 / singleLineText
+  수수료입금여부 / singleSelect
+  연결식별 / multipleRecordLinks
+  Name (from 종소세2020) / multipleLookupValues
+  연결정보 / multipleRecordLinks
+  Last Modified / lastModifiedTime
+  Created / createdTime
+  Field 18 / singleLineText
+  종소세2024 copy / singleLineText
+  종소세2024 copy / singleLineText
+  종소세2024 copy / singleLineText
+
