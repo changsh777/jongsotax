@@ -20,9 +20,9 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/Users/changmini/NAS/종소세2026/_로그/file_server_launchd.log</string>
+  <string>/Users/changmini/jongsotax/file_server.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/changmini/NAS/종소세2026/_로그/file_server_launchd_err.log</string>
+  <string>/Users/changmini/jongsotax/file_server_err.log</string>
 
   <key>WorkingDirectory</key>
   <string>/Users/changmini/jongsotax</string>
