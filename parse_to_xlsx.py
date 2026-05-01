@@ -274,6 +274,42 @@ def write_xlsx(rows):
     wb.save(OUT_XLSX)
 
 
+def _notify_errors(no_pdf: list, empty_income: list):
+    """파싱 에러 텔레그램 알림 (종소택스봇)"""
+    import os, json, urllib.request
+    token   = os.environ.get("BOT_TOKEN", "")
+    chat_id = os.environ.get("ADMIN_CHAT_ID", "")
+    if not token or not chat_id:
+        print("[텔레그램] 환경변수 미설정 — 알림 생략")
+        return
+
+    lines = ["[종소세 파싱 결과 알림]"]
+    if no_pdf:
+        lines.append(f"\n❌ PDF 없음 ({len(no_pdf)}명):")
+        for name in no_pdf:
+            lines.append(f"  • {name}")
+    if empty_income:
+        lines.append(f"\n⚠️ 수입금액 비어있음 ({len(empty_income)}명):")
+        for name in empty_income:
+            lines.append(f"  • {name}")
+    if not no_pdf and not empty_income:
+        lines.append("✅ 모든 고객 정상 파싱 완료")
+
+    text = "\n".join(lines)
+    url  = f"https://api.telegram.org/bot{token}/sendMessage"
+    body = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+    req  = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        print(f"[텔레그램] 알림 발송 완료 (에러 {len(no_pdf)}건, 수입비어있음 {len(empty_income)}건)")
+    except Exception as e:
+        print(f"[텔레그램] 알림 실패 (무시): {e}")
+
+
 def main(sync_gsheet=True):
     # 입력 명단 순서 + 처리상태 (Track A 에러 케이스 포함)
     order, status_map = get_input_order()
@@ -320,7 +356,9 @@ def main(sync_gsheet=True):
             except Exception as e:
                 print(f"    [수수료 계산 실패] {name}: {e}")
             rows.append(data)
-            print(f"  ✓ {name}  (수입 {data['수입금액총계']:,}) [{data['처리상태']}]")
+            _inc = data['수입금액총계']
+            _inc_str = f"{_inc:,}" if isinstance(_inc, int) else str(_inc)
+            print(f"  ✓ {name}  (수입 {_inc_str}) [{data['처리상태']}]")
         else:
             # PDF 없는 케이스 - 에러로 행 추가
             empty = {c: "" for c in COLUMNS}
@@ -330,20 +368,26 @@ def main(sync_gsheet=True):
             rows.append(empty)
             print(f"  ✗ {name}  PDF 없음 [{empty['처리상태']}]")
 
+    # 에러 분류
+    no_pdf_names   = [r["성명"] for r in rows if not r.get("PDF경로")]
+    empty_income   = [r["성명"] for r in rows if r.get("PDF경로") and not r.get("수입금액총계")]
+
     if rows:
         write_xlsx(rows)
         print(f"\n[로컬 엑셀] {OUT_XLSX} ({len(rows)}건)")
 
         if sync_gsheet:
             try:
-                from gsheet_writer import upsert_row
-                # PDF 파싱된 건만 upsert (에러 = PDF 없음인 행은 제외)
+                from gsheet_writer import write_all
+                # PDF 파싱된 건만 (에러=PDF없음 제외)
                 ok_rows = [r for r in rows if r.get("PDF경로")]
-                for r in ok_rows:
-                    upsert_row(r)
-                print(f"[구글시트] {len(ok_rows)}건 upsert 완료")
+                write_all(ok_rows)
+                print(f"[구글시트] {len(ok_rows)}건 write_all 완료")
             except Exception as e:
                 print(f"[구글시트] 실패: {e}")
+
+    # 텔레그램 알림
+    _notify_errors(no_pdf_names, empty_income)
 
 
 if __name__ == "__main__":

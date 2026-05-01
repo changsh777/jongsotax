@@ -107,15 +107,34 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return True
 
 
+def parse_name_arg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """명령어에서 이름 추출. /work강동수 또는 /work 강동수 둘 다 처리"""
+    # context.args 있으면 우선
+    if context.args:
+        return " ".join(context.args).strip()
+    # 없으면 raw text에서 명령어 부분 제거
+    text = update.message.text or ""
+    # /work강동수 → 강동수
+    parts = text.split(None, 1)
+    if len(parts) >= 2:
+        return parts[1].strip()
+    # /work강동수 (공백 없음) → 명령어에서 / 뒤 prefix 제거
+    cmd = parts[0].lstrip("/")
+    for prefix in ("work", "작업", "agree", "수임동의", "send", "발송"):
+        if cmd.startswith(prefix):
+            return cmd[len(prefix):].strip()
+    return ""
+
+
 # ===== /작업 =====
 async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
-    if not context.args:
-        await update.message.reply_text("사용법: /작업 장성환"); return
+    name = parse_name_arg(update, context)
+    if not name:
+        await update.message.reply_text("사용법: /work 강동수  또는  /작업 강동수"); return
     if not nas_ok():
         await nas_fail(update); return
 
-    name    = context.args[0].strip()
     folders = find_folders(name)
 
     if not folders:
@@ -146,12 +165,12 @@ async def do_work(update: Update, folder: Path):
 # ===== /수임동의 =====
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
-    if not context.args:
-        await update.message.reply_text("사용법: /수임동의 장성환"); return
+    name = parse_name_arg(update, context)
+    if not name:
+        await update.message.reply_text("사용법: /agree 강동수  또는  /수임동의 강동수"); return
     if not nas_ok():
         await nas_fail(update); return
 
-    name    = context.args[0].strip()
     folders = find_folders(name)
 
     if not folders:
@@ -178,12 +197,12 @@ async def do_status(update: Update, folder: Path):
 # ===== /발송 =====
 async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
-    if not context.args:
-        await update.message.reply_text("사용법: /발송 장성환"); return
+    name = parse_name_arg(update, context)
+    if not name:
+        await update.message.reply_text("사용법: /send 강동수  또는  /발송 강동수"); return
     if not nas_ok():
         await nas_fail(update); return
 
-    name    = context.args[0].strip()
     folders = find_folders(name)
 
     if not folders:
@@ -286,9 +305,9 @@ def main():
         logger.warning("NAS 미연결: %s", NAS_BASE)
 
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("work",  cmd_work))    # /work 장성환
-    app.add_handler(CommandHandler("agree", cmd_status))  # /agree 장성환 (수임동의 상태)
-    app.add_handler(CommandHandler("send",  cmd_send))    # /send 장성환
+    app.add_handler(CommandHandler("work",    cmd_work))    # /work 강동수
+    app.add_handler(CommandHandler("agree",   cmd_status))  # /agree 강동수
+    app.add_handler(CommandHandler("send",    cmd_send))    # /send 강동수
     app.add_handler(MessageHandler(filters.Document.ALL,            handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
