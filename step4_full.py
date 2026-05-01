@@ -575,8 +575,15 @@ def ensure_output_workbook():
 # -------------------- 메인 --------------------
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", type=int, default=1, help="시작 번호 (1-based, 예: --start 169)")
+    args = parser.parse_args()
+
     customers = read_customers_from_gsheet()
-    print(f"[시작] 총 {len(customers)}명 처리\n")
+    start_idx = args.start - 1  # 0-based
+    customers = customers[start_idx:]
+    print(f"[시작] {args.start}번부터 총 {len(customers)}명 처리\n")
 
     wb, ws = ensure_output_workbook()
 
@@ -588,7 +595,7 @@ def main():
         # alert/confirm 자동 닫기 (자료없음 alert 등 차단 방지)
         page.on("dialog", lambda d: d.dismiss())
 
-        for i, c in enumerate(customers, 1):
+        for i, c in enumerate(customers, args.start):
             print(f"[{i}/{len(customers)}] {c['name']}")
             r = process_one(ctx, page, c)
 
