@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+  <key>Label</key>
+  <string>com.taxeng.file_server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/changmini/NAS/종소세2026/file_server.py</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/changmini/NAS/종소세2026/_로그/file_server_launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/changmini/NAS/종소세2026/_로그/file_server_launchd_err.log</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/changmini/NAS/종소세2026</string>
+
+</dict>
+</plist>
