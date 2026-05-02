@@ -1,0 +1,206 @@
+"""
+incometaxbot.py - 종소세 신규접수 자동 파싱 봇 (@incometax777_bot)
+
+동작:
+  n8n → Airtable 신규접수 → Telegram 메시지 수신
+  "{이름}님 신규/기존 접수되었습니다." 패턴 감지
+  → 신규/기존 구분 없이 항상 홈택스ID/PW 방식으로 처리
+  → PDF 있으면 바로 파싱 / 없으면 Edge CDP로 직접 다운 후 파싱
+  → 결과 텔레그램 회신
+
+실행: python F:\종소세2026\incometaxbot.py
+전제: Edge 디버그 창 열려있어야 함 (launch_edge.py or launch_edge.bat)
+"""
+
+import sys, os, re, logging, asyncio
+from pathlib import Path
+from datetime import date
+
+# ===== 경로 설정 =====
+BASE_DIR = Path(__file__).parent          # F:\종소세2026
+os.environ.setdefault("SEOTAX_ENV", "nas")
+sys.path.insert(0, str(BASE_DIR))
+
+from telegram import Update
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+from gsheet_writer import get_credentials
+from config import CUSTOMER_DIR
+import gspread
+
+# ===== 설정 =====
+TOKEN          = "8672211090:AAHecG0siKKAKm5jVUEzDHTfX5v5XSE7BHw"
+SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
+NAS_BASE       = CUSTOMER_DIR             # Z:\종소세2026\고객 (config SEOTAX_ENV=nas)
+SEASON_END     = date(2026, 6, 1)
+RUN_ONE_SCRIPT = BASE_DIR / "_run_one.py" # 다운로드+파싱 헬퍼
+
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler(str(BASE_DIR / "incometaxbot.log"), encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+# ===== 구글시트 고객 정보 조회 =====
+def get_customer_info(name: str) -> dict | None:
+    try:
+        creds = get_credentials()
+        gc = gspread.authorize(creds)
+        ws = gc.open_by_key(SPREADSHEET_ID).worksheet("접수명단")
+        for r in ws.get_all_records():
+            if str(r.get("성명", "")).strip() == name:
+                return {
+                    "name":       name,
+                    "jumin_raw":  str(r.get("주민번호", "") or "").strip(),
+                    "hometax_id": str(r.get("홈택스아이디", "") or "").strip(),
+                    "hometax_pw": str(r.get("홈택스비번", "") or "").strip(),
+                    "수입":       str(r.get("수입", "") or "").strip(),
+                }
+        return None
+    except Exception as e:
+        logger.error("구글시트 조회 실패: %s", e)
+        return None
+
+
+# ===== PDF 존재 여부 확인 =====
+def has_pdf(name: str) -> bool:
+    try:
+        import unicodedata
+        name_nfc = unicodedata.normalize("NFC", name)
+        for folder in NAS_BASE.iterdir():
+            if unicodedata.normalize("NFC", folder.name).startswith(f"{name_nfc}_"):
+                return bool(list(folder.glob("종소세안내문_*.pdf")))
+    except Exception as e:
+        logger.warning("PDF 확인 실패: %s", e)
+    return False
+
+
+# ===== 파싱만 실행 (PDF 이미 있는 경우) =====
+async def run_parse(name: str) -> str:
+    """parse_and_sync_신규.py 직접 호출"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            f"import sys; sys.path.insert(0, r'{BASE_DIR}'); "
+            f"import parse_and_sync_신규 as pm; pm.NEW_NAMES=['{name}']; pm.main()",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BASE_DIR),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        out = (stdout + stderr).decode("utf-8", errors="replace").strip()
+        return out[-600:] if out else "출력 없음"
+    except asyncio.TimeoutError:
+        return "타임아웃 (2분)"
+    except Exception as e:
+        return f"오류: {e}"
+
+
+# ===== 다운로드 + 파싱 (PDF 없는 경우) =====
+async def run_download_and_parse(info: dict) -> str:
+    """_run_one.py 호출: Edge CDP 로그인 → PDF 다운 → 파싱"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(RUN_ONE_SCRIPT),
+            info["name"], info["hometax_id"], info["hometax_pw"], info["jumin_raw"],
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BASE_DIR),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        out = (stdout + stderr).decode("utf-8", errors="replace").strip()
+        return out[-800:] if out else "출력 없음"
+    except asyncio.TimeoutError:
+        return "타임아웃 (5분) — Edge CDP 열려있는지 확인"
+    except Exception as e:
+        return f"오류: {e}"
+
+
+# ===== 메시지 핸들러 =====
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip()
+    logger.info("수신: %s", text[:100])
+
+    if date.today() >= SEASON_END:
+        await update.message.reply_text("⏹ 종소세 시즌 종료(6/1)")
+        return
+
+    # 패턴: "{이름}님 신규/기존 접수되었습니다."
+    m = re.search(r"(.+?)님\s*(신규|기존)?\s*접수", text)
+    if not m:
+        return
+
+    name = m.group(1).strip()
+    logger.info("접수 감지: %s", name)
+    await update.message.reply_text(f"📥 {name}님 접수 확인\n구글시트 조회 중...")
+
+    info = get_customer_info(name)
+    if not info:
+        await update.message.reply_text(f"❌ {name} — 구글시트 없음. 수동 처리 필요")
+        return
+
+    if not info["hometax_id"] or not info["jumin_raw"]:
+        await update.message.reply_text(
+            f"⚠️ {name} — 홈택스ID 또는 주민번호 없음\n"
+            "구글시트 입력 후 재시도 필요"
+        )
+        return
+
+    # 이미 파싱 완료
+    if info["수입"]:
+        await update.message.reply_text(
+            f"ℹ️ {name} — 이미 파싱 완료 (수입: {info['수입']}원)"
+        )
+        return
+
+    # PDF 있으면 바로 파싱
+    if has_pdf(name):
+        await update.message.reply_text(f"📄 {name} PDF 확인 → 파싱 시작 (최대 2분)...")
+        out = await run_parse(name)
+        await update.message.reply_text(f"✅ {name} 파싱 완료\n\n{out}")
+        return
+
+    # PDF 없으면 Edge CDP로 다운로드 후 파싱
+    await update.message.reply_text(
+        f"🔄 {name} PDF 없음 → Edge 로그인+다운+파싱 시작 (최대 5분)...\n"
+        f"⚠️ Edge 디버그 창이 열려있어야 합니다"
+    )
+    out = await run_download_and_parse(info)
+    if "완료" in out or "파싱" in out:
+        await update.message.reply_text(f"✅ {name} 전체 처리 완료\n\n{out}")
+    else:
+        await update.message.reply_text(f"❌ {name} 처리 실패\n\n{out}")
+
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if date.today() >= SEASON_END:
+        await update.message.reply_text("⏹ 시즌 종료됨")
+        return
+    nas_ok = "✅" if NAS_BASE.exists() else "❌ NAS 미연결"
+    await update.message.reply_text(
+        f"✅ incometax777_bot 정상\n"
+        f"NAS: {nas_ok}\n"
+        f"시즌 종료: {SEASON_END}"
+    )
+
+
+# ===== 메인 =====
+def main():
+    if date.today() >= SEASON_END:
+        logger.info("시즌 종료 - 봇 시작 안 함")
+        return
+
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    logger.info("incometax777_bot 시작 (NAS: %s)", NAS_BASE)
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
