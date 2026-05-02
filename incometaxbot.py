@@ -27,6 +27,7 @@ TOKEN          = "8672211090:AAHecG0siKKAKm5jVUEzDHTfX5v5XSE7BHw"
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")
 SEASON_END     = date(2026, 6, 1)
+CHAT_ID_FILE   = Path.home() / "종소세2026/.credentials/telegram_chat_id.txt"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -94,10 +95,22 @@ def run_parse(name: str) -> str:
         return f"오류: {e}"
 
 
+# ===== chat_id 자동 저장 =====
+def save_chat_id(chat_id: int):
+    try:
+        CHAT_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CHAT_ID_FILE.write_text(str(chat_id))
+    except Exception as e:
+        logger.warning("chat_id 저장 실패: %s", e)
+
+
 # ===== 메시지 핸들러 =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     logger.info("수신: %s", text[:100])
+
+    # chat_id 자동 저장 (auto_parse.py 알림용)
+    save_chat_id(update.message.chat_id)
 
     if date.today() >= SEASON_END:
         await update.message.reply_text("⏹ 종소세 시즌 종료(6/1)")
