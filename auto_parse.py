@@ -123,19 +123,20 @@ def main():
         if jumin.isdigit() and len(jumin) < 13:
             jumin = jumin.zfill(13)
 
-        # seen에 추가 (중복 알림 방지)
-        seen.add(name)
-        save_seen(seen)
-
         if not has_pdf(name):
-            logger.info("%s NAS PDF 없음", name)
-            send_telegram(
-                f"📥 신규 접수: *{name}*\n"
-                f"PDF 없음 — Windows에서 실행:\n"
-                f"`python _run_one.py {name} {hid} {pw} {jumin}`"
-            )
+            if name not in seen:
+                # PDF 없음 알림 최초 1회만
+                seen.add(name)
+                save_seen(seen)
+                logger.info("%s NAS PDF 없음 — 알림 발송", name)
+                send_telegram(
+                    f"📥 신규 접수: *{name}*\n"
+                    f"PDF 없음 — Windows에서 실행:\n"
+                    f"`python _run_one.py {name} {hid} {pw} {jumin}`"
+                )
             continue
 
+        # PDF 있으면 seen 여부 무관하게 파싱 실행
         logger.info("%s PDF 확인 → 파싱 시작", name)
         send_telegram(f"📄 *{name}* 파싱 시작...")
         out = run_parse(name)
