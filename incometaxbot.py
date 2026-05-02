@@ -5,40 +5,34 @@ incometaxbot.py - 종소세 신규접수 자동 파싱 봇 (@incometax777_bot)
   n8n → Airtable 신규접수 → Telegram 메시지 수신
   "{이름}님 신규/기존 접수되었습니다." 패턴 감지
   → 신규/기존 구분 없이 항상 홈택스ID/PW 방식으로 처리
-  → PDF 있으면 바로 파싱 / 없으면 Edge CDP로 직접 다운 후 파싱
-  → 결과 텔레그램 회신
+  → NAS에 PDF 있으면 바로 파싱
+  → PDF 없으면 Telegram으로 Windows 실행 명령어 안내
 
-실행: python F:\종소세2026\incometaxbot.py
-전제: Edge 디버그 창 열려있어야 함 (launch_edge.py or launch_edge.bat)
+실행: python3 ~/macmini-bots/incometaxbot.py  (Mac Mini)
 """
 
-import sys, os, re, logging, asyncio
+import sys, os, re, logging, subprocess
 from pathlib import Path
 from datetime import date
 
-# ===== 경로 설정 =====
-BASE_DIR = Path(__file__).parent          # F:\종소세2026
-os.environ.setdefault("SEOTAX_ENV", "nas")
-sys.path.insert(0, str(BASE_DIR))
+sys.path.insert(0, os.path.expanduser("~/종소세2026"))
 
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from gsheet_writer import get_credentials
-from config import CUSTOMER_DIR
 import gspread
 
 # ===== 설정 =====
 TOKEN          = "8672211090:AAHecG0siKKAKm5jVUEzDHTfX5v5XSE7BHw"
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
-NAS_BASE       = CUSTOMER_DIR             # Z:\종소세2026\고객 (config SEOTAX_ENV=nas)
+NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")
 SEASON_END     = date(2026, 6, 1)
-RUN_ONE_SCRIPT = BASE_DIR / "_run_one.py" # 다운로드+파싱 헬퍼
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO,
     handlers=[
-        logging.FileHandler(str(BASE_DIR / "incometaxbot.log"), encoding="utf-8"),
+        logging.FileHandler(os.path.expanduser("~/incometaxbot.log")),
         logging.StreamHandler(),
     ],
 )
@@ -79,43 +73,20 @@ def has_pdf(name: str) -> bool:
     return False
 
 
-# ===== 파싱만 실행 (PDF 이미 있는 경우) =====
-async def run_parse(name: str) -> str:
-    """parse_and_sync_신규.py 직접 호출"""
+# ===== Mac Mini에서 파싱 실행 =====
+def run_parse(name: str) -> str:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-c",
-            f"import sys; sys.path.insert(0, r'{BASE_DIR}'); "
-            f"import parse_and_sync_신규 as pm; pm.NEW_NAMES=['{name}']; pm.main()",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(BASE_DIR),
+        result = subprocess.run(
+            [sys.executable, "-c",
+             f"import sys; sys.path.insert(0,'{os.path.expanduser('~/종소세2026')}'); "
+             f"import parse_and_sync_신규 as pm; pm.NEW_NAMES=['{name}']; pm.main()"],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.expanduser("~/종소세2026")
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        out = (stdout + stderr).decode("utf-8", errors="replace").strip()
-        return out[-600:] if out else "출력 없음"
-    except asyncio.TimeoutError:
-        return "타임아웃 (2분)"
-    except Exception as e:
-        return f"오류: {e}"
-
-
-# ===== 다운로드 + 파싱 (PDF 없는 경우) =====
-async def run_download_and_parse(info: dict) -> str:
-    """_run_one.py 호출: Edge CDP 로그인 → PDF 다운 → 파싱"""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, str(RUN_ONE_SCRIPT),
-            info["name"], info["hometax_id"], info["hometax_pw"], info["jumin_raw"],
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(BASE_DIR),
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-        out = (stdout + stderr).decode("utf-8", errors="replace").strip()
-        return out[-800:] if out else "출력 없음"
-    except asyncio.TimeoutError:
-        return "타임아웃 (5분) — Edge CDP 열려있는지 확인"
+        out = (result.stdout + result.stderr).strip()
+        return out[-400:] if out else "출력 없음"
+    except subprocess.TimeoutExpired:
+        return "타임아웃"
     except Exception as e:
         return f"오류: {e}"
 
@@ -159,21 +130,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # PDF 있으면 바로 파싱
     if has_pdf(name):
-        await update.message.reply_text(f"📄 {name} PDF 확인 → 파싱 시작 (최대 2분)...")
-        out = await run_parse(name)
+        await update.message.reply_text(f"📄 PDF 확인 → 파싱 시작...")
+        out = run_parse(name)
         await update.message.reply_text(f"✅ {name} 파싱 완료\n\n{out}")
         return
 
-    # PDF 없으면 Edge CDP로 다운로드 후 파싱
+    # PDF 없으면 Windows 실행 명령어 안내
     await update.message.reply_text(
-        f"🔄 {name} PDF 없음 → Edge 로그인+다운+파싱 시작 (최대 5분)...\n"
-        f"⚠️ Edge 디버그 창이 열려있어야 합니다"
+        f"🖥 {name} — NAS에 PDF 없음\n\n"
+        f"Windows 데스크탑에서 실행:\n"
+        f"`python _run_one.py {name} {info['hometax_id']} {info['hometax_pw']} {info['jumin_raw']}`\n\n"
+        f"(Edge 디버그 창 먼저 열기)"
     )
-    out = await run_download_and_parse(info)
-    if "완료" in out or "파싱" in out:
-        await update.message.reply_text(f"✅ {name} 전체 처리 완료\n\n{out}")
-    else:
-        await update.message.reply_text(f"❌ {name} 처리 실패\n\n{out}")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,7 +166,7 @@ def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("incometax777_bot 시작 (NAS: %s)", NAS_BASE)
+    logger.info("incometax777_bot 시작")
     app.run_polling(drop_pending_updates=True)
 
 
