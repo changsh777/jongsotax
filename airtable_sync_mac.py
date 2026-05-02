@@ -124,9 +124,9 @@ def main():
     normal = [(n, t) for n, t in fields if t not in SKIP_TYPES]
     linked = [(n, t) for n, t in fields if t in SKIP_TYPES]
 
-    # 장부유형 바로 뒤에 안내문파싱 컬럼 삽입
+    # 자동회신 바로 뒤 (발송관리 앞)에 안내문파싱 컬럼 삽입
     normal_names = [n for n, _ in normal]
-    insert_after = next((i for i, n in enumerate(normal_names) if n == "장부유형"),
+    insert_after = next((i for i, n in enumerate(normal_names) if n == "자동회신"),
                         len(normal_names) - 1)  # 없으면 맨 뒤
 
     header = (
