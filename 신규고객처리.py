@@ -55,7 +55,9 @@ def load_신규_customers():
     for r in rows:
         name       = str(r.get("성명", "") or "").strip()
         구분        = str(r.get("고객구분", "") or "").strip()
-        jumin      = str(r.get("주민번호", "") or "").strip()
+        jumin      = str(r.get("주민번호", "") or "").replace("-", "").strip()
+        if jumin.isdigit() and len(jumin) < 13:
+            jumin = jumin.zfill(13)  # 구글시트 숫자 저장 시 앞자리 0 소실 복원
         phone      = str(r.get("핸드폰번호", "") or "").strip()
         hometax_id = str(r.get("홈택스아이디", "") or "").strip()
         hometax_pw = str(r.get("홈택스비번", "") or "").strip()
