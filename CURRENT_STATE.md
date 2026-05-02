@@ -1,5 +1,5 @@
 # 종소세 2026 현재 상태
-> 마지막 업데이트: 2026-05-02
+> 마지막 업데이트: 2026-05-02 (incometaxbot Windows 전환)
 
 ---
 
@@ -31,6 +31,8 @@
 | `parse_and_sync_신규.py` | PDF → parse_anneam → 파싱결과.xlsx + 구글시트 | ✅ 작동 |
 | `airtable_sync_mac.py` | 에어테이블→구글시트 1분 자동싱크 (맥미니 크론) | ✅ 작동 |
 | `show_status.py` | 전체 고객 처리 현황 출력 | ✅ 작동 |
+| `incometaxbot.py` | Telegram봇 @incometax777_bot — 신규접수 감지→다운+파싱 자동화 (Windows 실행) | ✅ 완성 |
+| `_run_one.py` | incometaxbot 서브프로세스용 — Edge CDP 다운+파싱 1명 처리 | ✅ 완성 |
 
 ---
 
@@ -87,17 +89,37 @@ page.evaluate("document.getElementById('menuAtag_4103080000').onclick()")
 
 ---
 
+## incometaxbot 실행 방법 (Windows 데스크탑)
+
+```
+# 터미널에서:
+cd F:\종소세2026
+python incometaxbot.py
+
+# Edge CDP는 PDF 다운로드 필요할 때만 미리 열어두기:
+python launch_edge.py
+```
+
+**흐름 요약:**
+- n8n → Telegram "@incometax777_bot" 채팅 → "홍길동님 신규 접수되었습니다."
+- 봇이 구글시트 조회 → NAS PDF 확인
+- PDF 있음 → parse_and_sync_신규.py 직접 실행 (Edge 불필요)
+- PDF 없음 → _run_one.py 서브프로세스 → Edge CDP 로그인+다운+파싱
+
+---
+
 ## 시즌 종료 처리 (2026-06-01)
 - [x] `airtable_sync_mac.py` — 6/1 자동 중단 내장
+- [x] `incometaxbot.py` — 6/1 자동 중단 내장 (SEASON_END)
 - [ ] `jongsotaxbot.py` — 6/1 종료 추가 필요
-- [ ] `incometaxbot` — 6/1 종료 추가 필요
 
 ---
 
 ## 다음 할 일
-1. 신규 미처리 고객 건바이건 처리 (정도민·김태윤·지성호·김경필·이재윤)
-2. 기존 고객 PDF — 세무사 수동 로그인 방식으로 조심히
-3. jongsotaxbot·incometaxbot 6/1 종료 처리
+1. n8n 워크플로우 — 에어테이블 신규접수 시 @incometax777_bot 채팅으로 Telegram 메시지 전송 추가
+2. 신규 미처리 고객 건바이건 처리 (정도민·김태윤·지성호·김경필·이재윤)
+3. 기존 고객 PDF — 세무사 수동 로그인 방식으로 조심히
+4. jongsotaxbot.py 6/1 종료 처리
 
 ---
 
