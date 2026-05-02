@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 # ===== 구글시트 고객 정보 조회 =====
-def get_customer_info(name: str) -> dict | None:
+def get_customer_info(name: str):
     try:
         creds = get_credentials()
         gc = gspread.authorize(creds)
