@@ -291,35 +291,54 @@ def login_via_id_pw(page, ht_id, ht_pw, jumin7):
         for inp in modal_inputs_info:
             print(f"        {inp}")
 
-        # XPath로 주민등록번호 라벨 옆의 input 찾기
-        jumin_inputs = page.locator(
-            "xpath=//*[contains(text(),'주민등록번호')]"
-            "/following::input[not(@type='button')][not(@type='checkbox')][position()<=4]"
-        ).all()
-        visible_jumin = [el for el in jumin_inputs if el.is_visible()]
-        print(f"    [Login] 주민번호 라벨 옆 보이는 input: {len(visible_jumin)}개")
+        # name 속성으로 직접 주민번호 input 찾기
+        j1 = page.locator("input[name='iptUserJuminNo1']")
+        j2 = page.locator("input[name='iptUserJuminNo2']")
 
-        # 그중 빈 것 + ID/PW input 제외
-        empty = []
-        for el in visible_jumin:
-            try:
-                ph = el.get_attribute("placeholder") or ""
-                if "검색" in ph or "아이디" in ph or "비밀번호" in ph:
-                    continue
-                if el.input_value() == "":
-                    empty.append(el)
-            except Exception:
-                pass
-        print(f"    [Login] 그중 빈 input: {len(empty)}개")
+        j1_visible = j1.is_visible()
+        j2_visible = j2.is_visible()
+        print(f"    [Login] iptUserJuminNo1 visible={j1_visible}, iptUserJuminNo2 visible={j2_visible}")
 
-        if len(empty) >= 2:
-            empty[0].fill(jumin7[:6])
-            empty[1].fill(jumin7[6:])
-            time.sleep(0.5)
+        if j1_visible and j2_visible:
+            front6  = jumin7[:6]
+            seventh = jumin7[6:] if len(jumin7) >= 7 else ""
+            print(f"    [Login] 주민번호 입력 시도: front6={front6!r}, seventh={seventh!r}")
+
+            # click(3번) 선택 후 press_sequentially 입력 (WebSquare 호환)
+            j1.click(click_count=3)
+            j1.press_sequentially(front6, delay=50)
+            time.sleep(0.3)
+
+            j2.click(click_count=3)
+            j2.press_sequentially(seventh, delay=50)
+            time.sleep(0.3)
+
+            # 실제 들어갔는지 확인
+            v1 = j1.input_value()
+            v2 = j2.input_value()
+            print(f"    [Login] 입력 확인: j1={v1!r}, j2={v2!r}")
+
+            if v1 != front6 or v2 != seventh:
+                # JS fallback
+                print(f"    [Login] fill 실패 → JS fallback 시도")
+                page.evaluate(f"""
+                    () => {{
+                        const j1 = document.querySelector("input[name='iptUserJuminNo1']");
+                        const j2 = document.querySelector("input[name='iptUserJuminNo2']");
+                        if (j1) {{ j1.value = {front6!r}; j1.dispatchEvent(new Event('input', {{bubbles:true}})); j1.dispatchEvent(new Event('change', {{bubbles:true}})); }}
+                        if (j2) {{ j2.value = {seventh!r}; j2.dispatchEvent(new Event('input', {{bubbles:true}})); j2.dispatchEvent(new Event('change', {{bubbles:true}})); }}
+                    }}
+                """)
+                time.sleep(0.3)
+                v1 = j1.input_value()
+                v2 = j2.input_value()
+                print(f"    [Login] JS 후 확인: j1={v1!r}, j2={v2!r}")
+
+            time.sleep(0.3)
             click_visible_text(page, "확인")
             time.sleep(4)
         else:
-            print(f"    [Login] 2차인증 입력 필드 부족")
+            print(f"    [Login] 2차인증 입력 필드 없음 (visible 아님)")
             return False
 
     print(f"    [Login] 최종 URL: {page.url}")

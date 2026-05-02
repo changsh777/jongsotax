@@ -10,6 +10,7 @@ tokens.json
 *.env
 .env*
 secrets.py
+config_secret.py
 .credentials/
 
 # 캐시 / 임시
