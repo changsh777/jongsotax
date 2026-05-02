@@ -7,7 +7,7 @@ airtable_writer.py - 파싱 결과 에어테이블 직접 업데이트
 
 에어테이블 필드 (접수명단 테이블):
     수입       : 수입금액 (숫자)
-    기장의무   : 기장유형 텍스트
+    장부유형   : 싱글셀렉트 (간편장부(기준경비율)/복식부기의무자/성실신고확인대상자/...)
     타소득유형 : 싱글셀렉트 (없음/근로소득/연금소득/금융소득/기타소득/근로+기타/...)
 """
 import json, urllib.request, urllib.parse
@@ -26,6 +26,24 @@ def _get_pat() -> str:
         if p.exists():
             return p.read_text().strip()
     raise FileNotFoundError("airtable_pat.txt 없음 — .credentials/ 폴더에 PAT 파일 생성 필요")
+
+
+# ── 장부유형 → 에어테이블 셀렉트 매핑 ───────────────────
+def map_장부유형_select(기장의무: str, 경비율: str = "") -> str | None:
+    """파싱결과 기장의무 + 경비율 → 에어테이블 장부유형 셀렉트 값
+    매핑 안 되는 경우 None 반환 (기존값 유지, 덮어쓰지 않음)
+    """
+    기장 = (기장의무 or "").strip()
+    경비 = (경비율 or "").strip()
+
+    if "성실신고" in 기장:
+        return "성실신고확인대상자"
+    if "복식부기" in 기장:
+        return "복식부기의무자"
+    if "간편" in 기장 and "기준경비율" in 경비:
+        return "간편장부(기준경비율)"
+
+    return None  # 나머지는 수동 처리 (안건드림)
 
 
 # ── 타소득 → 에어테이블 셀렉트 매핑 ─────────────────────
@@ -109,12 +127,13 @@ def update_parsed_result(name: str, parsed: dict) -> bool:
         fields = {}
         if parsed.get("수입금액총계"):
             fields["수입"] = int(parsed["수입금액총계"])
-        if parsed.get("기장의무"):
-            fields["기장의무"] = parsed["기장의무"]
+        장부_val = map_장부유형_select(parsed.get("기장의무", ""), parsed.get("추계시적용경비율", ""))
+        if 장부_val:
+            fields["장부유형"] = 장부_val  # None이면 기존값 유지 (덮어쓰지 않음)
         fields["타소득유형"] = 타소득_val
 
         patch_record(record_id, fields, pat)
-        print(f"  [에어테이블] {name} 업데이트 완료: 수입={fields.get('수입'):,} / {fields.get('기장의무')} / {타소득_val}")
+        print(f"  [에어테이블] {name} 업데이트 완료: 수입={fields.get('수입'):,} / {장부_val} / {타소득_val}")
         return True
 
     except Exception as e:
