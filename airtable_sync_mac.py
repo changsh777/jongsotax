@@ -56,7 +56,7 @@ def fetch_meta():
             return fields, view_id
     return [], None
 
-def fetch_all_records(view_id: str | None = None):
+def fetch_all_records(view_id=None):
     """에어테이블 행번호 기준 — view_id 지정 시 Grid view 순서 보장"""
     records, offset = [], None
     while True:
