@@ -31,8 +31,9 @@
 | `parse_and_sync_신규.py` | PDF → parse_anneam → 파싱결과.xlsx + 구글시트 | ✅ 작동 |
 | `airtable_sync_mac.py` | 에어테이블→구글시트 1분 자동싱크 (맥미니 크론) | ✅ 작동 |
 | `show_status.py` | 전체 고객 처리 현황 출력 | ✅ 작동 |
-| `incometaxbot.py` | Telegram봇 @incometax777_bot — 신규접수 감지→다운+파싱 자동화 (Windows 실행) | ✅ 완성 |
-| `_run_one.py` | incometaxbot 서브프로세스용 — Edge CDP 다운+파싱 1명 처리 | ✅ 완성 |
+| `incometaxbot.py` | Telegram봇 @incometax777_bot — 신규접수 감지→파싱 자동화 **(Mac Mini 실행)** | ✅ 완성 |
+| `_run_one.py` | PDF 없을 때 Windows에서 수동 실행 — Edge CDP 다운+파싱 1명 처리 | ✅ 완성 |
+| `kakao_bank_monitor.py` | 카카오뱅크 입금 알림(winsdk 토스트) 감지 → 구글시트 입금체크 업데이트 **(Windows 전용)** | ✅ 완성 |
 
 ---
 
