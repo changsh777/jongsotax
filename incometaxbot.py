@@ -28,6 +28,7 @@ SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")
 SEASON_END     = date(2026, 6, 1)
 CHAT_ID_FILE   = Path.home() / "종소세2026/.credentials/telegram_chat_id.txt"
+ADMIN_CHAT_ID  = "5980411081"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
