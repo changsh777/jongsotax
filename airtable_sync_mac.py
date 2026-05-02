@@ -76,9 +76,12 @@ def fetch_all_records(view_id=None):
     return records
 
 def cell_value(val, ftype):
+    # 체크박스: 미체크 시 API가 None 반환 → "X"  /  체크 시 True → "O"
+    if ftype == "checkbox":
+        return "O" if val else "X"
     if val is None: return ""
     if ftype in SKIP_TYPES: return f"[{len(val)}건]" if isinstance(val, list) else str(val)
-    if isinstance(val, bool): return "O" if val else ""
+    if isinstance(val, bool): return "O" if val else "X"
     if isinstance(val, (int, float)): return val
     if isinstance(val, dict): return val.get("name") or val.get("email") or str(val)
     return str(val)
