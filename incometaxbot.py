@@ -100,8 +100,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏹ 종소세 시즌 종료(6/1)")
         return
 
-    # 패턴: "{이름}님 신규/기존 접수되었습니다."
-    m = re.search(r"(.+?)님\s*(신규|기존)?\s*접수", text)
+    # 패턴: "{이름}님 신규 접수" 또는 "{이름}님 기존 접수" — 신규/기존 필수 (다른 메시지 오작동 방지)
+    m = re.search(r"(.+?)님\s*(신규|기존)\s*접수", text)
     if not m:
         return
 
