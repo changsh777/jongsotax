@@ -135,9 +135,10 @@ def main():
         if jumin.isdigit() and len(jumin) < 13:
             jumin = jumin.zfill(13)
 
-        # Edge 실행 확인
-        if not is_edge_running():
-            launch_edge()
+        # Edge 디버그 모드로 재시작
+        subprocess.run(["taskkill", "/f", "/im", "msedge.exe"], capture_output=True)
+        time.sleep(1)
+        launch_edge()
         if not is_edge_running():
             print(f"  Edge 실행 실패 — 스킵")
             continue
