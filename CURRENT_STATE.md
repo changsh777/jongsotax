@@ -85,6 +85,11 @@ INDIVIDUAL_PREVIEW_BTN_ID = "#mf_txppWframe_trigger1"
 
 ---
 
+## 시즌 종료 처리 (2026-06-01)
+- [x] `airtable_sync_mac.py` — 6/1 자동 중단 로직 내장
+- [ ] `jongsotaxbot.py` (Mac Mini `~/종소세2026/`) — 6/1 종료 추가 필요
+- [ ] `incometaxbot` — 6/1 종료 추가 필요
+
 ## 다음 할 일
 
 1. **신규 미처리 고객** 정도민·김태윤·지성호·김경필·이재윤 → 신규고객처리.py 건바이건
