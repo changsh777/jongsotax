@@ -47,9 +47,12 @@ def get_customer_info(name: str) -> dict | None:
         ws = gc.open_by_key(SPREADSHEET_ID).worksheet("접수명단")
         for r in ws.get_all_records():
             if str(r.get("성명", "")).strip() == name:
+                jumin = str(r.get("주민번호", "") or "").replace("-", "").strip()
+                if jumin.isdigit() and len(jumin) < 13:
+                    jumin = jumin.zfill(13)  # 구글시트 숫자 저장 시 앞자리 0 소실 복원
                 return {
                     "name":       name,
-                    "jumin_raw":  str(r.get("주민번호", "") or "").strip(),
+                    "jumin_raw":  jumin,
                     "hometax_id": str(r.get("홈택스아이디", "") or "").strip(),
                     "hometax_pw": str(r.get("홈택스비번", "") or "").strip(),
                     "수입":       str(r.get("수입", "") or "").strip(),
