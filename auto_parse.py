@@ -27,6 +27,7 @@ SHEET_NAME     = "접수명단"
 NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")
 TELEGRAM_TOKEN = "REDACTED_TOKEN_2"
 CHAT_ID_FILE   = CRED_DIR / "telegram_chat_id.txt"
+ADMIN_CHAT_ID  = "5980411081"
 LOCK_DIR       = Path.home() / "종소세2026/.parse_locks"
 
 logging.basicConfig(
@@ -51,7 +52,7 @@ def get_creds():
 def get_chat_id():
     if CHAT_ID_FILE.exists():
         return CHAT_ID_FILE.read_text().strip()
-    return None
+    return ADMIN_CHAT_ID
 
 def send_telegram(text):
     import urllib.request, urllib.parse
