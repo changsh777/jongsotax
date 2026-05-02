@@ -123,21 +123,25 @@ def main():
     rows = ws.get_all_records()
 
     # 미처리 신규 건 추출
-    targets = []
+    targets = []  # (name, hid, pw, jumin)
     for r in rows:
         구분 = str(r.get("고객구분", "")).strip()
         수입 = str(r.get("수입", "")).strip()
         hid  = str(r.get("홈택스아이디", "") or "").strip()
+        pw   = str(r.get("홈택스비번", "") or "").strip()
         name = str(r.get("성명", "")).strip()
+        jumin = str(r.get("주민번호", "") or "").replace("-", "").strip()
+        if jumin.isdigit() and len(jumin) < 13:
+            jumin = jumin.zfill(13)
         if 구분 == "신규" and not 수입 and hid and name:
-            targets.append(name)
+            targets.append((name, hid, pw, jumin))
 
     if not targets:
         return  # 조용히 종료
 
     logger.info("미처리 신규: %s", targets)
 
-    for name in targets:
+    for name, hid, pw, jumin in targets:
         if is_locked(name):
             logger.info("%s 처리 중 (락) — 스킵", name)
             continue
@@ -146,8 +150,8 @@ def main():
             logger.info("%s NAS PDF 없음 — 스킵 (Windows에서 _run_one.py 필요)", name)
             send_telegram(
                 f"⚠️ *{name}* — PDF 없음\n"
-                f"Windows 데스크탑에서 실행 필요:\n"
-                f"`python _run_one.py {name} <홈택스ID> <PW> <주민번호>`"
+                f"Windows에서 실행:\n"
+                f"`python _run_one.py {name} {hid} {pw} {jumin}`"
             )
             continue
 
