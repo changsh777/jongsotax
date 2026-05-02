@@ -227,6 +227,77 @@ def update_consent_status(ws, row_idx: int, status: str,
         ws.update_cell(row_idx, col["카카오발송문"], kakao_msg)
 
 
+# 파싱결과 → 접수명단 컬럼 매핑 (접수명단 컬럼명: 파싱결과 키)
+# 접수명단 실제 헤더: 수입, 할인가, 수수료
+PARSED_TO_접수명단 = {
+    "수입":   "수입금액총계",
+    "할인가": "사전접수할인가",
+    "수수료": "일반접수가",
+}
+
+
+def write_parsed_to_접수명단(rows: list[dict]):
+    """파싱결과를 접수명단 시트에 성명 기준 upsert.
+
+    rows: parse_to_xlsx 결과 (COLUMNS 기준 dict 리스트)
+    - 수입금액, 할인가, 수수료 3개 컬럼만 업데이트
+    - 나머지 접수명단 컬럼은 절대 건드리지 않음
+    """
+    creds = get_credentials()
+    gc    = gspread.authorize(creds)
+    sh    = gc.open_by_key(SPREADSHEET_ID)
+    ws    = sh.worksheet("접수명단")
+
+    headers  = ws.row_values(1)
+    all_vals = ws.get_all_values()
+
+    # 성명 컬럼 위치
+    try:
+        name_col = headers.index("성명") + 1
+    except ValueError:
+        raise RuntimeError("접수명단에 '성명' 컬럼 없음")
+
+    # 업데이트 대상 컬럼 위치 (없는 컬럼 스킵)
+    col_map = {}
+    for sheet_col, parsed_key in PARSED_TO_접수명단.items():
+        if sheet_col in headers:
+            col_map[headers.index(sheet_col) + 1] = parsed_key
+
+    if not col_map:
+        raise RuntimeError("접수명단에 업데이트 가능한 컬럼 없음")
+
+    # 성명 → 행번호 인덱스
+    name_to_row = {}
+    for i, row in enumerate(all_vals[1:], start=2):
+        if len(row) >= name_col:
+            n = row[name_col - 1].strip()
+            if n:
+                name_to_row[n] = i
+
+    # 배치 업데이트
+    from gspread.utils import rowcol_to_a1
+    updates = []
+    skipped = []
+    for data in rows:
+        name = data.get("성명", "").strip()
+        row_idx = name_to_row.get(name)
+        if not row_idx:
+            skipped.append(name)
+            continue
+        for col_idx, parsed_key in col_map.items():
+            val = data.get(parsed_key, "")
+            col_letter = rowcol_to_a1(1, col_idx).rstrip("0123456789")
+            updates.append({"range": f"{col_letter}{row_idx}", "values": [[val]]})
+
+    if updates:
+        ws.batch_update(updates)
+
+    if skipped:
+        print(f"  [접수명단] 매칭 안된 이름 {len(skipped)}명: {skipped[:5]}")
+
+    return len(rows) - len(skipped)
+
+
 def read_customers_from_gsheet() -> list[dict]:
     """접수명단 시트에서 고객 목록 읽기 → step4 인풋 형식으로 반환
 

@@ -1,10 +1,12 @@
+import sys, io, os
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+os.environ.setdefault("SEOTAX_ENV", "nas")   # NAS 경로 우선
 """
 PDF 안내문 → 엑셀 파싱 결과
 - 고객/{성명_주민앞6}/종소세안내문_*.pdf 모두 스캔
 - 11개 필드 + 메타정보 추출
 - output/파싱결과.xlsx + 구글시트 동기화
 """
-import sys
 sys.path.insert(0, r"F:\종소세2026")
 import pdfplumber
 import openpyxl
@@ -377,14 +379,21 @@ def main(sync_gsheet=True):
         print(f"\n[로컬 엑셀] {OUT_XLSX} ({len(rows)}건)")
 
         if sync_gsheet:
+            ok_rows = [r for r in rows if r.get("PDF경로")]
+            # 1) 안내문파싱 시트 (전체 파싱 내역 보관)
             try:
                 from gsheet_writer import write_all
-                # PDF 파싱된 건만 (에러=PDF없음 제외)
-                ok_rows = [r for r in rows if r.get("PDF경로")]
                 write_all(ok_rows)
-                print(f"[구글시트] {len(ok_rows)}건 write_all 완료")
+                print(f"[구글시트] 안내문파싱 {len(ok_rows)}건 write_all 완료")
             except Exception as e:
-                print(f"[구글시트] 실패: {e}")
+                print(f"[구글시트] 안내문파싱 실패: {e}")
+            # 2) 접수명단 시트에 수입·할인가·수수료 3개 컬럼만 upsert (에어테이블 순서 유지)
+            try:
+                from gsheet_writer import write_parsed_to_접수명단
+                n = write_parsed_to_접수명단(ok_rows)
+                print(f"[구글시트] 접수명단 {n}건 업데이트 (수입/할인가/수수료)")
+            except Exception as e:
+                print(f"[구글시트] 접수명단 업데이트 실패: {e}")
 
     # 텔레그램 알림
     _notify_errors(no_pdf_names, empty_income)
