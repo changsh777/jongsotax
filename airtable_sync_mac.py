@@ -85,14 +85,42 @@ def main():
     header = [n for n, _ in normal] + ["[링크]" + n for n, _ in linked] + ["_sync_at"]
 
     now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    rows = [header] + [
+    new_rows = [
         [cell_value(r["fields"].get(n), t) for n, t in normal + linked] + [now]
         for r in records
     ]
 
     ws = gspread.authorize(get_creds()).open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+
+    # 기존 구글시트 값 읽기 (파싱결과 등 로컬 업데이트 보존용)
+    existing = ws.get_all_values()  # [[row], [row], ...]
+    # 성명 컬럼 인덱스 찾기 (헤더에서)
+    name_col = header.index("성명") if "성명" in header else 0
+    # 기존 행을 성명 기준 dict로
+    existing_by_name = {}
+    if len(existing) > 1:
+        ex_header = existing[0]
+        for ex_row in existing[1:]:
+            if ex_row and len(ex_row) > name_col:
+                key = ex_row[name_col]
+                if key:
+                    existing_by_name[key] = ex_row
+
+    # 에어테이블 빈값은 기존 구글시트 값 유지 (변동값만 덮어쓰기)
+    merged_rows = []
+    for row in new_rows:
+        name = row[name_col] if len(row) > name_col else ""
+        ex_row = existing_by_name.get(name, [])
+        merged = []
+        for i, val in enumerate(row):
+            if val == "" and i < len(ex_row) and ex_row[i] != "":
+                merged.append(ex_row[i])  # 에어테이블 빈값 → 기존 값 유지
+            else:
+                merged.append(val)        # 에어테이블 값 있으면 덮어쓰기
+        merged_rows.append(merged)
+
     ws.clear()
-    ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
+    ws.update(range_name="A1", values=[header] + merged_rows, value_input_option="USER_ENTERED")
     print(f"[{now}] 동기화 완료: {len(records)}건")
 
 
