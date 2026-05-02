@@ -124,11 +124,16 @@ def main():
     normal = [(n, t) for n, t in fields if t not in SKIP_TYPES]
     linked = [(n, t) for n, t in fields if t in SKIP_TYPES]
 
-    # 헤더: 에어테이블 컬럼 + 안내문파싱 컬럼 + _sync_at
+    # 장부유형 바로 뒤에 안내문파싱 컬럼 삽입
+    normal_names = [n for n, _ in normal]
+    insert_after = next((i for i, n in enumerate(normal_names) if n == "장부유형"),
+                        len(normal_names) - 1)  # 없으면 맨 뒤
+
     header = (
-        [n for n, _ in normal]
-        + ["[링크]" + n for n, _ in linked]
+        normal_names[:insert_after + 1]
         + PARSE_COLS
+        + normal_names[insert_after + 1:]
+        + ["[링크]" + n for n, _ in linked]
         + ["_sync_at"]
     )
 
@@ -138,9 +143,16 @@ def main():
         name = str(r["fields"].get("성명", "")).strip()
         pd   = parse_data.get(name, {})
 
-        row = [cell_value(r["fields"].get(n), t) for n, t in normal + linked]
-        row += [str(pd.get(col, "")) for col in PARSE_COLS]
-        row += [now]
+        at_vals = [cell_value(r["fields"].get(n), t) for n, t in normal]
+        parse_vals = [str(pd.get(col, "")) for col in PARSE_COLS]
+
+        row = (
+            at_vals[:insert_after + 1]
+            + parse_vals
+            + at_vals[insert_after + 1:]
+            + [cell_value(r["fields"].get(n), t) for n, t in linked]
+            + [now]
+        )
         rows.append(row)
 
     ws = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
