@@ -27,7 +27,7 @@ PARSE_SHEET    = "안내문파싱"
 SKIP_TYPES     = {"multipleRecordLinks", "multipleAttachments", "multipleLookupValues"}
 
 # 자동회신↔발송관리 사이에 삽입할 컬럼
-PARSE_COLS     = ["타소득(O/X)", "기장의무", "추계시적용경비율"]
+PARSE_COLS     = ["타소득(O/X)", "이자", "배당", "근로(단일)", "근로(복수)", "연금", "기타", "기장의무", "추계시적용경비율"]
 # 타소득(O/X) 파생에 쓸 개별 O/X 원본 컬럼
 TAXINCOME_COLS = ["이자", "배당", "근로(단일)", "근로(복수)", "연금", "기타"]
 
@@ -149,7 +149,17 @@ def main():
 
         # 타소득(O/X): 이자~기타 중 하나라도 O면 O, 전부 X(또는 공백)면 X
         타소득ox = "O" if any(str(pd.get(c, "")).strip() == "O" for c in TAXINCOME_COLS) else "X"
-        parse_vals = [타소득ox, str(pd.get("기장의무", "")), str(pd.get("추계시적용경비율", ""))]
+        parse_vals = [
+            타소득ox,
+            str(pd.get("이자", "")),
+            str(pd.get("배당", "")),
+            str(pd.get("근로(단일)", "")),
+            str(pd.get("근로(복수)", "")),
+            str(pd.get("연금", "")),
+            str(pd.get("기타", "")),
+            str(pd.get("기장의무", "")),
+            str(pd.get("추계시적용경비율", "")),
+        ]
 
         row = (
             at_vals[:insert_after + 1]
