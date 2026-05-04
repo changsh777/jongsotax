@@ -140,18 +140,25 @@ def login_hometax_id(page, hometax_id: str, hometax_pw: str, jumin_raw: str = ""
         page.goto(HOMETAX_MAIN_URL, wait_until="domcontentloaded")
     time.sleep(2)
 
-    # '아이디 로그인' 아이콘 클릭
+    # '아이디 로그인' 아이콘 클릭 (홈택스 느릴 때 대비 15초 대기)
     try:
         tab = page.get_by_text("아이디 로그인", exact=True).first
-        if tab.is_visible(timeout=3000):
+        if tab.is_visible(timeout=15000):
             tab.click()
             time.sleep(2)
+        else:
+            print("    [로그인] '아이디 로그인' 탭 미표시 → 건너뜀", flush=True)
     except Exception:
         pass
 
     # ID 입력
     id_el = page.locator("#mf_txppWframe_loginboxFrame_iptUserId")
-    if not id_el.is_visible(timeout=5000):
+    if not id_el.is_visible(timeout=10000):
+        # 이미 로그인된 상태인지 확인
+        if not page.locator("#mf_txppWframe_loginboxFrame_iptUserId").is_visible(timeout=1000):
+            if page.locator("#menuAtag_4103080000").count() > 0:
+                print(f"    [로그인] 이미 로그인 상태 - 계속 진행", flush=True)
+                return True
         print("    [로그인] ID 입력란 못 찾음", flush=True)
         return False
     id_el.fill(hometax_id)
@@ -204,13 +211,29 @@ def login_hometax_id(page, hometax_id: str, hometax_pw: str, jumin_raw: str = ""
     except Exception:
         pass
 
-    # 성공 여부 확인 — 사용자 이름 또는 메뉴 항목 존재로 확인
+    # 성공 여부 확인 — 로그인 박스 사라짐 + 메뉴 준비까지 대기
     try:
-        # 신고도움서비스 메뉴(menuAtag_4103080000)가 있고 로그인 박스가 없으면 성공
-        menu_exists = page.locator("#menuAtag_4103080000").count() > 0
-        login_box_visible = page.locator("#mf_txppWframe_loginboxFrame_iptUserId").is_visible(timeout=500)
-        if menu_exists and not login_box_visible:
-            print(f"    [로그인 성공] {hometax_id}", flush=True)
+        # 1단계: 로그인 박스 사라질 때까지 최대 30초 대기 (홈택스 느린 경우 대응)
+        print(f"    [로그인] 응답 대기 중...", flush=True)
+        for i in range(30):
+            login_box_visible = page.locator("#mf_txppWframe_loginboxFrame_iptUserId").is_visible(timeout=500)
+            if not login_box_visible:
+                break
+            time.sleep(1)
+        else:
+            print(f"    [로그인] 30초 내 응답 없음 → 실패", flush=True)
+            return False  # 로그인 박스 여전히 있음 → 실패
+
+        # 2단계: 신고도움서비스 메뉴(SPA 세션 완성 지표) 최대 12초 대기
+        for _ in range(12):
+            if page.locator("#menuAtag_4103080000").count() > 0:
+                print(f"    [로그인 성공] {hometax_id}", flush=True)
+                return True
+            time.sleep(1)
+
+        # 3단계: 메뉴 없어도 로그인 박스 없으면 성공 처리 (메뉴 구조 차이 대응)
+        if not page.locator("#mf_txppWframe_loginboxFrame_iptUserId").is_visible(timeout=500):
+            print(f"    [로그인 성공 (메뉴 미확인)] {hometax_id}", flush=True)
             return True
     except Exception:
         pass

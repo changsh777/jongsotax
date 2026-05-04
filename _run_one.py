@@ -37,12 +37,39 @@ print(f"[_run_one] {name} 처리 시작 (ID: {hometax_id})", flush=True)
 
 wb, ws_out = ensure_output_workbook()
 
+def _ensure_edge_cdp():
+    """Edge CDP 확인 후 없으면 자동 실행"""
+    import urllib.request, subprocess, time
+    from pathlib import Path
+    try:
+        urllib.request.urlopen("http://localhost:9222/json", timeout=2)
+        return  # 이미 떠있음
+    except Exception:
+        pass
+    print("[Edge] CDP 미실행 → 자동 실행 중...", flush=True)
+    EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    USER_DATA = Path(r"F:\종소세2026\.edge_debug_profile")
+    USER_DATA.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen([EDGE, "--remote-debugging-port=9222",
+                      f"--user-data-dir={USER_DATA}", "https://hometax.go.kr"])
+    for _ in range(15):
+        time.sleep(1)
+        try:
+            urllib.request.urlopen("http://localhost:9222/json", timeout=2)
+            print("[Edge] CDP 준비 완료", flush=True)
+            return
+        except Exception:
+            pass
+    print("[오류] Edge CDP 시작 실패", flush=True)
+    sys.exit(1)
+
+_ensure_edge_cdp()
+
 with sync_playwright() as p:
     try:
         browser = p.chromium.connect_over_cdp("http://localhost:9222")
     except Exception as e:
         print(f"[오류] Edge CDP 연결 실패: {e}")
-        print("launch_edge.py 또는 launch_edge.bat 실행 후 재시도하세요")
         sys.exit(1)
 
     ctx  = browser.contexts[0]
