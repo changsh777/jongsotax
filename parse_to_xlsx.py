@@ -57,7 +57,9 @@ def first_match(pattern, text, default=""):
 
 def parse_prev_income_xlsx(folder):
     """전년도 종소세 xlsx → 11개 필드 dict"""
-    f = folder / "전년도종소세신고내역.xlsx"
+    f = folder / "전년도종소세신고내역.xls"
+    if not f.exists():
+        f = folder / "전년도종소세신고내역.xlsx"  # 이전 버전 호환
     if not f.exists():
         return {}
     try:
