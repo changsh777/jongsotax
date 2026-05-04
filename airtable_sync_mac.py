@@ -139,16 +139,37 @@ def main():
         + ["_sync_at"]
     )
 
+    # ── 기존 구글시트 값 먼저 읽기 (빈값 덮어쓰기 방지) ───
+    ws = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+    existing_all = ws.get_all_values()
+    existing_by_name = {}
+    if existing_all:
+        ex_header = existing_all[0]
+        if "성명" in ex_header:
+            name_col_idx = ex_header.index("성명")
+            for ex_row in existing_all[1:]:
+                if len(ex_row) > name_col_idx and str(ex_row[name_col_idx]).strip():
+                    rname = str(ex_row[name_col_idx]).strip()
+                    existing_by_name[rname] = {
+                        ex_header[i]: ex_row[i]
+                        for i in range(len(ex_header))
+                        if i < len(ex_row)
+                    }
+
     now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = [header]
     for r in records:
         name = str(r["fields"].get("성명", "")).strip()
         pd   = parse_data.get(name, {})
+        ex   = existing_by_name.get(name, {})
 
         at_vals = [cell_value(r["fields"].get(n), t) for n, t in normal]
 
-        # 타소득(O/X): 이자~기타 중 하나라도 O면 O, 전부 X(또는 공백)면 X
-        타소득ox = "O" if any(str(pd.get(c, "")).strip() == "O" for c in TAXINCOME_COLS) else "X"
+        # 타소득(O/X): 안내문파싱에 데이터 있을 때만 계산 (없으면 "" → 기존값 유지)
+        if name in parse_data:
+            타소득ox = "O" if any(str(pd.get(c, "")).strip() == "O" for c in TAXINCOME_COLS) else "X"
+        else:
+            타소득ox = ""
         parse_vals = [
             타소득ox,
             str(pd.get("이자", "")),
@@ -161,19 +182,30 @@ def main():
             str(pd.get("추계시적용경비율", "")),
         ]
 
-        row = (
+        raw_row = (
             at_vals[:insert_after + 1]
             + parse_vals
             + at_vals[insert_after + 1:]
             + [cell_value(r["fields"].get(n), t) for n, t in linked]
             + [now]
         )
-        rows.append(row)
 
-    ws = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        # ── 핵심: 새 값이 비어있고 기존 구글시트에 값이 있으면 기존값 유지 ──
+        final_row = []
+        for col_name, new_val in zip(header, raw_row):
+            if col_name == "_sync_at":
+                final_row.append(new_val)  # 동기화시각은 항상 갱신
+            else:
+                ex_val = ex.get(col_name, "")
+                if str(new_val).strip() == "" and str(ex_val).strip() != "":
+                    final_row.append(ex_val)  # 기존 구글시트값 유지
+                else:
+                    final_row.append(new_val)
+        rows.append(final_row)
+
     ws.clear()
     ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
-    print(f"[{now}] 동기화 완료: {len(records)}건  (에어테이블 순서 + 안내문파싱 병합)")
+    print(f"[{now}] 동기화 완료: {len(records)}건  (에어테이블 순서 + 안내문파싱 병합, 기존값 보호)")
 
 
 if __name__ == "__main__":
