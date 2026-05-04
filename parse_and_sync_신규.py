@@ -21,7 +21,7 @@ from gsheet_writer import get_credentials
 import gspread
 
 # 처리할 신규 고객 목록
-NEW_NAMES = ["탁설환"]  # 유영주는 홈택스 자료 없음
+NEW_NAMES = ["손준", "공진주"]
 
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 
@@ -31,13 +31,17 @@ COL_MAP = {
     "추계시적용경비율": "추계시적용경비율",
     "할인가":         "사전접수할인가",
     "수수료":         "일반접수가",
+    "타소득(O/X)":   "타소득(O/X)",    # PARSE_COLS 파생 컬럼
     "이자":           "이자",
     "배당":           "배당",
     "근로(단일)":     "근로(단일)",
     "근로(복수)":     "근로(복수)",
     "연금":           "연금",
     "기타":           "기타",
+    "기장의무":       "기장의무",       # PARSE_COLS 기장의무 컬럼
 }
+
+_TAXINCOME_KEYS = ["이자", "배당", "근로(단일)", "근로(복수)", "연금", "기타"]
 
 
 def main():
@@ -81,6 +85,11 @@ def main():
                 data["일반접수가"]   = fee["final_fee"]
             except Exception as e:
                 print(f"  [수수료 계산 실패] {name}: {e}")
+
+        # 타소득(O/X) 파생 계산
+        data["타소득(O/X)"] = "O" if any(
+            str(data.get(c, "")).strip() == "O" for c in _TAXINCOME_KEYS
+        ) else "X"
 
         data["처리상태"] = "완료"
         data["처리일시"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
