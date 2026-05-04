@@ -62,7 +62,7 @@ def parse_prev_income_xlsx(folder):
         return {}
     try:
         import xlrd
-        wb = xlrd.open_workbook(f)
+        wb = xlrd.open_workbook(str(f))
         sheet = wb.sheet_by_index(0)
         if sheet.nrows < 2:
             return {}
@@ -115,7 +115,7 @@ def parse_vat_xlsx(folder):
                 ws = wb.active
                 rows = list(ws.iter_rows(values_only=True))
             except Exception:
-                wb = xlrd.open_workbook(f)
+                wb = xlrd.open_workbook(str(f))
                 sheet = wb.sheet_by_index(0)
                 rows = [sheet.row_values(i) for i in range(sheet.nrows)]
 
