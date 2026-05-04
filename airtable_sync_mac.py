@@ -139,9 +139,9 @@ def main():
         + ["_sync_at"]
     )
 
-    # ── 기존 구글시트 값 먼저 읽기 (빈값 덮어쓰기 방지) ───
+    # ── 기존 구글시트 값 먼저 읽기 (FORMULA 렌더: 수식셀은 "=..." 문자열로 옴) ───
     ws = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-    existing_all = ws.get_all_values()
+    existing_all = ws.get_all_values(value_render_option="FORMULA")
     existing_by_name = {}
     if existing_all:
         ex_header = existing_all[0]
@@ -190,22 +190,33 @@ def main():
             + [now]
         )
 
-        # ── 핵심: 새 값이 비어있고 기존 구글시트에 값이 있으면 기존값 유지 ──
+        # ── 셀별 우선순위 ──────────────────────────────────
+        # 1) 기존 구글시트가 수식(=...)  → 항상 수식 유지 (에어테이블 무시)
+        # 2) 에어테이블 빈값 + 구글시트에 값 있음 → 구글시트값 유지
+        # 3) 그 외 → 에어테이블/파싱 값 사용
         final_row = []
         for col_name, new_val in zip(header, raw_row):
             if col_name == "_sync_at":
-                final_row.append(new_val)  # 동기화시각은 항상 갱신
+                final_row.append(new_val)
             else:
                 ex_val = ex.get(col_name, "")
-                if str(new_val).strip() == "" and str(ex_val).strip() != "":
-                    final_row.append(ex_val)  # 기존 구글시트값 유지
+                if str(ex_val).startswith("="):
+                    final_row.append(ex_val)       # 수식 셀 → 수식 그대로 유지
+                elif str(new_val).strip() == "" and str(ex_val).strip() != "":
+                    final_row.append(ex_val)       # 에어테이블 빈값 → 구글시트값 유지
                 else:
                     final_row.append(new_val)
         rows.append(final_row)
 
+    n_formula = sum(
+        1 for row in rows[1:] for v in row if str(v).startswith("=")
+    )
+    if n_formula:
+        print(f"  수식 셀 유지: {n_formula}개")
+
     ws.clear()
     ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
-    print(f"[{now}] 동기화 완료: {len(records)}건  (에어테이블 순서 + 안내문파싱 병합, 기존값 보호)")
+    print(f"[{now}] 동기화 완료: {len(records)}건  (에어테이블 순서 + 안내문파싱 병합, 기존값·수식 보호)")
 
 
 if __name__ == "__main__":
