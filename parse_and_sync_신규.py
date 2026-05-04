@@ -164,14 +164,6 @@ def main():
     else:
         print("[접수명단] 업데이트 없음")
 
-    # 4) 에어테이블 업데이트 (빈값 보호 로직 포함 — airtable_writer 참조)
-    try:
-        from airtable_writer import update_parsed_result
-        for name, data in new_data.items():
-            update_parsed_result(name=name, parsed=data)
-    except Exception as e:
-        print(f"[에어테이블 업데이트 오류] {e}")
-
 
 if __name__ == "__main__":
     main()
