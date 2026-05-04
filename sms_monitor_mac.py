@@ -24,6 +24,7 @@ import requests
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 # ===== 설정 =====
 DB_PATH        = os.path.expanduser("~/Library/Messages/chat.db")
@@ -38,11 +39,18 @@ SOLAPI_SECRET = ""          # TODO: 솔라피 API SECRET
 SOLAPI_SENDER = ""          # TODO: 발신번호
 SOLAPI_TEMPLATE_자료접수 = ""  # TODO: 알림톡 템플릿 코드
 
-# 에어테이블 설정 (PAT는 config_secret.py에서 로드)
-try:
-    from config_secret import AIRTABLE_PAT
-except ImportError:
-    AIRTABLE_PAT = ""   # 맥미니에서는 ~/종소세2026/config_secret.py 필요
+# 에어테이블 설정
+def _load_airtable_pat() -> str:
+    pat_file = Path.home() / "종소세2026/.credentials/airtable_pat.txt"
+    if pat_file.exists():
+        return pat_file.read_text().strip()
+    try:
+        from config_secret import AIRTABLE_PAT as _PAT
+        return _PAT
+    except ImportError:
+        return ""
+
+AIRTABLE_PAT = _load_airtable_pat()
 AIRTABLE_BASE  = "appSvDTDOmYfBeIFs"
 AIRTABLE_TABLE = "tbl2f2h6GfSnLCQpt"
 
