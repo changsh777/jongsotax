@@ -664,13 +664,13 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
                 }
             """)
             if not clicked:
-                pdf_popup.close()
+                # 탭은 닫지 않음 (다음 고객이 같은 탭 재사용)
                 print(f"    [지급명세서] PDF 버튼 못 찾음", flush=True)
                 return False
         dl = dl_info.value
         status, _ = safe_download(dl, save_dir, f"{name}_{jumin6}.pdf")
         print(f"    [지급명세서PDF:{status}] {save_path}", flush=True)
-        pdf_popup.close()
+        # ClipReport 탭 유지 (다음 고객 trigger193이 같은 탭 업데이트해서 재사용 가능)
         return True
 
     except Exception as e:
