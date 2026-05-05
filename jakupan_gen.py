@@ -31,7 +31,33 @@ from gsheet_writer import get_credentials
 import gspread
 
 # ── 템플릿 경로 ──────────────────────────────────────────────────
-TEMPLATE = Path(r"F:\종소세2026\output\PDF\오상연\작업판_오상연_2024.xlsx")
+TEMPLATE_간편 = Path(r"F:\종소세2026\templates\빈양식_간편장부.xlsx")
+TEMPLATE_복식 = Path(r"F:\종소세2026\templates\빈양식_복식부기.xlsx")
+
+
+def select_template_and_sheet(biz_rows: list, 기장의무: str) -> tuple:
+    """안내문 파싱 결과로 템플릿·시트 선택
+    반환: (template_path, sheet_name)
+    """
+    reg_count  = sum(1 for b in biz_rows if b.get("사업자번호"))
+    free_count = sum(1 for b in biz_rows if not b.get("사업자번호"))
+    is_복식    = "복식" in 기장의무
+
+    if is_복식:
+        template = TEMPLATE_복식
+        sheet    = "사업자복식" if reg_count > 0 else "프리복식"
+    else:
+        template = TEMPLATE_간편
+        if reg_count >= 2:
+            sheet = "사업자+사업자"
+        elif reg_count == 1 and free_count > 0:
+            sheet = "사업자+프리"
+        elif free_count >= 2:
+            sheet = "프리+프리"
+        else:
+            sheet = "프리"   # 기본값 (프리 1개 또는 biz_rows 없음)
+
+    return template, sheet
 
 GSHEET_ID  = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 SHEET_NAME = "접수명단"
@@ -222,13 +248,33 @@ def make_jakupan(name, jumin6=""):
             ann_raw = {}
 
     biz_rows   = parse_anneam_biz(anneam_pdf) if anneam_pdf else []
-    ganyi_rows = read_ganyi(folder)
+    ganyi_rows = read_ganyi(folder, jumin6)
+
+    # 템플릿·시트 자동 선택
+    기장의무 = str(ann_raw.get("기장의무", "")).strip()
+    template_path, sheet_name = select_template_and_sheet(biz_rows, 기장의무)
+    print(f"  [템플릿] {template_path.name}  /  시트: {sheet_name}")
+
+    if not template_path.exists():
+        print(f"  [오류] 템플릿 없음: {template_path}")
+        return None
 
     # 템플릿 로드
-    wb = load_workbook(TEMPLATE)
+    wb = load_workbook(template_path)
 
-    # 프리 시트 채우기
-    ws_puri = wb["프리"]
+    if sheet_name not in wb.sheetnames:
+        print(f"  [오류] 시트 없음: {sheet_name}  (존재: {wb.sheetnames})")
+        return None
+
+    # 사용하지 않는 작업판 시트 삭제 (참조·업종코드·수지라·기본 등은 유지)
+    ALL_WORKPAN = {"프리", "프리+프리", "사업자+프리", "사업자+사업자",
+                   "프리복식", "사업자복식"}
+    for sn in list(wb.sheetnames):
+        if sn in ALL_WORKPAN and sn != sheet_name:
+            del wb[sn]
+
+    # 작업판 시트 채우기
+    ws_puri = wb[sheet_name]
     fill_puri(ws_puri, name, ann_raw, biz_rows, ganyi_rows, ann_raw)
 
     # 작업준비 시트 추가

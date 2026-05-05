@@ -200,15 +200,50 @@ def parse_jibup_pdf(folder):
     return records
 
 
-def read_ganyi(folder):
-    """간이용역소득 xlsx → list of dict"""
+def read_ganyi(folder, jumin6=""):
+    """간이용역소득 xlsx → list of dict
+    - 비밀번호 있는 경우 jumin6(주민번호 앞 6자리)로 해제 시도
+    """
+    import msoffcrypto, io
     gdir = folder / "간이용역소득"
     if not gdir.is_dir():
         return []
     rows = []
     for xf in gdir.glob("*.xlsx"):
         try:
-            wb = xlrd.open_workbook(str(xf))
+            # 먼저 암호화 여부 확인
+            with open(xf, 'rb') as f:
+                raw = f.read()
+            try:
+                of = msoffcrypto.OfficeFile(io.BytesIO(raw))
+                is_enc = of.is_encrypted()
+            except Exception:
+                is_enc = False
+
+            if is_enc and jumin6:
+                # 주민번호(앞6자리 또는 13자리)로 해제 시도
+                passwords = [jumin6]
+                if len(jumin6) == 6:
+                    # 생년월일 6자리 → 완전한 주민번호 없으면 앞6자리만 시도
+                    passwords.append(jumin6)
+                buf = None
+                for pw in passwords:
+                    try:
+                        of2 = msoffcrypto.OfficeFile(io.BytesIO(raw))
+                        decrypted = io.BytesIO()
+                        of2.load_key(password=pw)
+                        of2.decrypt(decrypted)
+                        buf = decrypted.getvalue()
+                        break
+                    except Exception:
+                        continue
+                if buf is None:
+                    print(f"  [경고] 비밀번호 해제 실패: {xf.name}")
+                    continue
+                wb = xlrd.open_workbook(file_contents=buf)
+            else:
+                wb = xlrd.open_workbook(str(xf))
+
             sheet = wb.sheet_by_index(0)
             if sheet.nrows < 2:
                 continue
@@ -216,8 +251,8 @@ def read_ganyi(folder):
             for i in range(1, sheet.nrows):
                 vals = sheet.row_values(i)
                 rows.append(dict(zip(hdrs, vals)))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [경고] {xf.name} 읽기 실패: {e}")
     return rows
 
 
@@ -343,8 +378,8 @@ def build_sheet(ws, name, jumin6, folder):
     merge_sec(ws, r, "② 지급명세서 / 간이용역소득 대조")
     r += 1
 
-    jibup_rows = parse_jibup_pdf(folder)   # 지급명세서 PDF 파싱
-    ganyi_rows  = read_ganyi(folder)        # 간이용역소득 xlsx
+    jibup_rows = parse_jibup_pdf(folder)          # 지급명세서 PDF 파싱
+    ganyi_rows  = read_ganyi(folder, jumin6)      # 간이용역소득 xlsx (비밀번호 처리 포함)
 
     # 컬럼: 구분(1) | 사업자번호(2) | 징수의무자(2) | 업종(1) | 지급총액(2) | 소득세(2) | 지방소득세(2)
     G_HDRS = ["구분", "사업자번호", "징수의무자 / 소득종류", "업종", "지급총액", "소득세", "지방소득세"]
