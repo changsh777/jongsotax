@@ -79,13 +79,19 @@ def main():
             if name:
                 row_by_name[name] = row
 
-    # Airtable → 구글시트 컬럼 직접 매핑 (신규 행에 채워넣을 필드)
+    # Airtable → 구글시트 컬럼 매핑
+    # key: 구글시트 컬럼명, value: 에어테이블 필드명
+    # ★ 에어테이블 값이 항상 우선 (기존 행도 덮어씀)
     AT_COL_MAP = {
-        "기존신규":   "기존신규",
+        "고객구분":   "고객구분",
         "주민번호":   "주민번호",
         "핸드폰번호": "핸드폰번호",
+        "홈택스아이디": "홈택스아이디",
+        "홈택스비번": "홈택스비번",
         "자동회신":   "자동회신",
         "입금체크":   "입금체크",
+        "할인가":     "할인가",
+        "수수료":     "수수료",
     }
 
     # 3) 에어테이블 순서대로 재배열 + 신규 행 추가
@@ -95,10 +101,16 @@ def main():
 
     for name, fields in at_records:
         if name in row_by_name:
-            # 기존 행: header 길이에 맞게 패딩 (끝 빈칸 복원)
-            row = row_by_name[name]
+            # 기존 행: header 길이에 맞게 패딩 후 에어테이블 값 덮어쓰기
+            row = list(row_by_name[name])
             if len(row) < len(header):
                 row = row + [""] * (len(header) - len(row))
+            for sheet_col, at_field in AT_COL_MAP.items():
+                if sheet_col in header:
+                    val = fields.get(at_field, "")
+                    if isinstance(val, bool):
+                        val = "O" if val else ""
+                    row[header.index(sheet_col)] = str(val) if val else ""
             sorted_rows.append(row)
             matched.append(name)
         else:

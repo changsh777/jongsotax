@@ -21,7 +21,7 @@ from gsheet_writer import get_credentials
 import gspread
 
 # 처리할 신규 고객 목록
-NEW_NAMES = ["손준", "공진주"]
+NEW_NAMES = ["김인구"]
 
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 

@@ -651,7 +651,7 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
         print(f"    [지급명세서] ClipReport URL: {pdf_popup.url[:60]}", flush=True)
 
         # ClipReport4 PDF 저장 버튼 클릭
-        with pdf_popup.expect_download(timeout=20000) as dl_info:
+        with pdf_popup.expect_download(timeout=60000) as dl_info:
             clicked = pdf_popup.evaluate("""
                 () => {
                     const btn = document.querySelector('.report_menu_pdf_button');

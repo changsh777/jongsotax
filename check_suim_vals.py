@@ -16,8 +16,8 @@ for r in rows:
     vals.add(repr(str(r.get('수임동의완료여부','')).strip()))
 print('수임동의완료여부 값 종류:', vals)
 
-target = {'마금현','지성호','김진곤','정도민','이윤경','김혜린'}
+target = {'신정숙','유영주','한효성','이재윤'}
 for r in rows:
     name = str(r.get('성명','')).strip()
     if name in target:
-        print(f"  {name}: 수임동의={r.get('수임동의완료여부','')!r} / ID={r.get('홈택스아이디','')!r}")
+        print(f"  {name}: 고객구분={r.get('고객구분','')!r} / ID={r.get('홈택스아이디','')!r} / PW={r.get('홈택스비번','')!r}")
