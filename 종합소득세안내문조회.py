@@ -464,6 +464,27 @@ JIPGUM_POPUP_ID   = "mf_txppWframe_UTERNAAT71"
 GANIYIYONG_BTN_ID = "mf_txppWframe_trigger2322"
 ANNEAM_TAB_ID     = "mf_txppWframe_tabControl1_tab_tabs3"  # 신고 안내자료 탭
 
+
+def _find_main_page(ctx):
+    """컨텍스트에서 메인 홈택스 페이지 반환 (popup.html 제외)
+    팝업이 pages[0]에 들어와도 올바른 메인 페이지를 찾음."""
+    for pg in ctx.pages:
+        if 'index_pp.xml' in pg.url:
+            return pg
+    for pg in ctx.pages:
+        if 'popup.html' not in pg.url and 'hometax' in pg.url:
+            return pg
+    return ctx.pages[0]
+
+
+def _find_ganiyiyong_popup(ctx):
+    """간이용역 팝업 페이지 찾기 (tewe.hometax.go.kr popup.html)"""
+    for pg in ctx.pages:
+        if 'popup.html' in pg.url and 'tewe' in pg.url:
+            return pg
+    return None
+
+
 def _click_anneam_tab(page):
     """신고 안내자료 탭 클릭 (지급명세서/간이용역 버튼 표시 전 필수)"""
     try:
@@ -475,7 +496,13 @@ def _click_anneam_tab(page):
 def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
     """지급명세서 등 제출내역 → 일괄출력 → PDF 저장
     반환: True(성공) / False(자료없음·실패)
+
+    수정 이력:
+    - 2026-05-05: 그리드 전체선택(setCellChecked) + about:blank→clipreport 대기 로직 추가
     """
+    _GRID_ID   = f"{JIPGUM_POPUP_ID}_wframe_grdList"
+    _SCWIN_KEY = f"{JIPGUM_POPUP_ID}_wframe_scwin"
+
     save_dir = folder / "지급명세서"
     save_dir.mkdir(exist_ok=True)
     jumin6 = str(jumin_raw).replace("-", "").replace(" ", "")[:6]
@@ -488,7 +515,7 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
     # 0. 신고 안내자료 탭 클릭
     _click_anneam_tab(page)
 
-    # 1. 지급명세서 팝업 열기 (locator.click = user gesture → 팝업 화면 안에 정상 렌더)
+    # 1. 지급명세서 팝업 열기 (locator.click = user gesture → popup 렌더 트리거)
     btn = page.locator(f"#{JIPGUM_BTN_ID}")
     if not btn.is_visible(timeout=3000):
         print(f"    [지급명세서] 버튼 없음 - 스킵", flush=True)
@@ -496,70 +523,132 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
     btn.click()
     time.sleep(3)
 
-    # 2. 팝업 열렸는지 확인
+    # 2. 팝업 열렸는지 확인 (display 방식: position:absolute 는 offsetParent 있으나 안전하게 display 체크)
     popup_visible = page.evaluate(f"""
-        () => {{ const p = document.getElementById('{JIPGUM_POPUP_ID}'); return !!(p && p.offsetParent); }}
+        () => {{
+            const p = document.getElementById('{JIPGUM_POPUP_ID}');
+            if (!p) return false;
+            return window.getComputedStyle(p).display !== 'none';
+        }}
     """)
     if not popup_visible:
         print(f"    [지급명세서] 팝업 미열림", flush=True)
         return False
 
-    # 2-1. 개인정보 공개 설정 (scwin API 직접 호출)
+    # 2-1. 그리드 행 수 확인 (자료 없으면 조기 종료)
+    row_count = page.evaluate(f"() => window['{_GRID_ID}']?.getRowCount() || 0")
+    if not row_count:
+        print(f"    [지급명세서] 자료 없음 (행수=0)", flush=True)
+        try:
+            page.evaluate(f"window['{_SCWIN_KEY}']?.btnClose_onclick_ev()")
+        except Exception:
+            pass
+        return False
+    print(f"    [지급명세서] 팝업 열림, 행수={row_count}", flush=True)
+
+    # 2-2. 그리드 전체 선택 (setCellChecked(rowIdx, 'chk', true))
     page.evaluate(f"""
         () => {{
-            const sc = window['{JIPGUM_POPUP_ID}_wframe_scwin'];
-            if (!sc) return;
-            // mskApplcYn 라디오 공개('1') 설정
-            try {{
-                const radio = sc['\$w'] && sc['\$w']('mskApplcYn');
-                if (radio && typeof radio.setValue === 'function') radio.setValue('1');
-            }} catch(e) {{}}
-            // DOM 방식 fallback
-            const pop = document.getElementById('{JIPGUM_POPUP_ID}');
-            if (!pop) return;
-            const radios = pop.querySelectorAll('input[type=radio]');
-            radios.forEach(r => {{
-                if (r.id && r.id.includes('mskApplcYn_input_1')) {{
-                    r.checked = true;
-                    r.dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
-                    r.dispatchEvent(new Event('change', {{bubbles:true}}));
-                }}
-            }});
+            const g = window['{_GRID_ID}'];
+            if (!g) return;
+            const cnt = g.getRowCount ? g.getRowCount() : 0;
+            for (let i = 0; i < cnt; i++) {{
+                try {{ g.setCellChecked(i, 'chk', true); }} catch(e) {{}}
+            }}
         }}
     """)
-    time.sleep(0.5)
-    print(f"    [지급명세서] 개인정보 공개 설정 완료", flush=True)
+    time.sleep(0.3)
 
-    # 3. scwin의 trigger193_onclick_ev() 직접 호출 → ClipReport 창 열기
-    # (체크박스 선택 포함 전체 로직이 이 함수에 캡슐화됨)
-    # 4. 일괄출력 ClipReport4 팝업 감지 (ctx.pages 검색 방식)
-    try:
-        page.evaluate(f"""
-            () => {{
-                const sc = window['{JIPGUM_POPUP_ID}_wframe_scwin'];
-                if (sc && sc.trigger193_onclick_ev) {{
-                    sc.trigger193_onclick_ev();
-                }}
+    # 2-3. 개인정보 공개 설정 (window 컴포넌트 직접 접근 → scwin fallback)
+    page.evaluate(f"""
+        () => {{
+            // 방법 1: window 컴포넌트 직접
+            const msk = window['{JIPGUM_POPUP_ID}_wframe_mskApplcYn'];
+            if (msk && typeof msk.setValue === 'function') {{
+                try {{ msk.setValue('1'); return; }} catch(e) {{}}
             }}
-        """)
-        time.sleep(7)  # ClipReport 팝업 로드 여유
+            // 방법 2: DOM _input_1
+            const r = document.getElementById('{JIPGUM_POPUP_ID}_wframe_mskApplcYn_input_1');
+            if (r) {{
+                r.checked = true;
+                r.dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
+            }}
+        }}
+    """)
+    time.sleep(0.3)
+    print(f"    [지급명세서] 전체선택·공개설정 완료", flush=True)
 
-        # ctx.pages에서 clipreport URL 검색 (expect_page 대신)
-        pdf_popup = next(
-            (pg for pg in ctx.pages if 'clipreport' in pg.url.lower()),
-            None
-        )
-        if not pdf_popup:
-            print(f"    [지급명세서] ClipReport 팝업 못 찾음 (ctx.pages: {[pg.url[:40] for pg in ctx.pages]})", flush=True)
+    # 3. trigger193_onclick_ev() → ClipReport 창 (about:blank → sesw.hometax.go.kr/serp/clipreport.do)
+    import shutil as _shutil
+    _downloads_dir = Path.home() / "Downloads"
+    before_pdfs = {f.name: f.stat().st_mtime for f in _downloads_dir.glob("*.pdf")}
+
+    def _poll_downloads_for_new_pdf(timeout_sec=20):
+        for _ in range(timeout_sec):
+            time.sleep(1)
+            after = {f.name: f.stat().st_mtime for f in _downloads_dir.glob("*.pdf")}
+            new_names = {n for n in after if n not in before_pdfs or after[n] > before_pdfs[n]}
+            if new_names:
+                newest = max(_downloads_dir.glob("*.pdf"), key=lambda f: f.stat().st_mtime)
+                _shutil.copy2(newest, save_path)
+                print(f"    [지급명세서:Downloads복사] {save_path.name}", flush=True)
+                return True
+        return False
+
+    # 3. trigger193 클릭 후 ClipReport 탭 폴링 (expect_page는 잡지 못하는 경우가 있어 탭 직접 탐색)
+    page.evaluate(f"""
+        () => {{
+            const sc = window['{_SCWIN_KEY}'];
+            if (sc && sc.trigger193_onclick_ev) sc.trigger193_onclick_ev();
+            else document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger193')?.click();
+        }}
+    """)
+
+    # ClipReport 탭 폴링 (최대 30초)
+    pdf_popup = None
+    for _ in range(60):
+        time.sleep(0.5)
+        for pg in ctx.pages:
             try:
-                page.evaluate(f"document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger93').click()")
+                url = pg.url
             except Exception:
-                pass
-            return False
+                continue
+            if 'clipreport' in url.lower():
+                pdf_popup = pg
+                break
+        if pdf_popup:
+            break
+        # edge:// / chrome:// 다운로드 탭 처리
+        for pg in ctx.pages:
+            try:
+                url = pg.url
+            except Exception:
+                continue
+            if url.startswith('edge://') or url.startswith('chrome://'):
+                print(f"    [지급명세서] Edge 다운로드 탭: {url[:50]}", flush=True)
+                try: pg.close()
+                except Exception: pass
+                if _poll_downloads_for_new_pdf(20):
+                    return True
 
-        pdf_popup.wait_for_load_state("networkidle", timeout=20000)
-        time.sleep(3)
-        print(f"    [지급명세서] ClipReport 팝업 URL: {pdf_popup.url[:60]}", flush=True)
+    if not pdf_popup:
+        print(f"    [지급명세서] ClipReport 못 찾음 (30초): {[pg.url[:40] for pg in ctx.pages]}", flush=True)
+        if _poll_downloads_for_new_pdf(10):
+            return True
+        try:
+            page.evaluate(f"window['{_SCWIN_KEY}']?.btnClose_onclick_ev()")
+        except Exception: pass
+        return False
+
+    print(f"    [지급명세서] ClipReport 탭 발견: {pdf_popup.url[:60]}", flush=True)
+
+    try:
+        try:
+            pdf_popup.wait_for_load_state("networkidle", timeout=25000)
+        except Exception:
+            pass
+        time.sleep(2)
+        print(f"    [지급명세서] ClipReport URL: {pdf_popup.url[:60]}", flush=True)
 
         # ClipReport4 PDF 저장 버튼 클릭
         with pdf_popup.expect_download(timeout=20000) as dl_info:
@@ -586,63 +675,139 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
 
     except Exception as e:
         print(f"    [지급명세서] 일괄출력 실패: {e}", flush=True)
-        # 팝업 닫기
         try:
-            page.evaluate(f"document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger93').click()")
-        except Exception:
-            pass
+            page.evaluate(f"window['{_SCWIN_KEY}']?.btnClose_onclick_ev()")
+        except Exception: pass
         return False
 
 
-def download_ganiyiyong_xlsx(page, folder, name, jumin_raw):
-    """(간이·용역) 본인 소득내역 → 조회 → 엑셀 내려받기
-    반환: True(성공) / False(자료없음·실패)
-    주의: 이 함수 호출 후 page URL이 popup.html로 바뀜 → 다음 고객은 REPORT_HELP_URL 재접속 필요
+GANIYIYONG_TYPES = [
+    ("간이지급명세서(거주자의 사업소득)", "사업소득"),
+    ("간이지급명세서(거주자의 기타소득)", "기타소득"),
+]
+
+
+def download_ganiyiyong_xlsx(ctx, page, folder, name, jumin_raw):
+    """간이용역 본인 소득내역 조회 → 사업소득/기타소득 각각 엑셀 저장
+    - 기존 팝업(tewe popup.html) 재사용 or trigger2322 클릭으로 새 팝업 열기
+    - mf_mateKndCd select: DOM 방식으로 값 설정 (scwin.$w는 함수가 아닌 객체)
+    - 조회 후 tbody tr 행수 확인 → 데이터 있을 때만 다운로드 시도
+    반환: True(하나 이상 성공) / False(전부 자료없음·실패)
     """
     save_dir = folder / "간이용역소득"
     save_dir.mkdir(exist_ok=True)
     jumin6 = str(jumin_raw).replace("-", "").replace(" ", "")[:6]
-    save_path = save_dir / f"{name}_{jumin6}.xlsx"
 
-    if save_path.exists():
-        print(f"    [간이용역 스킵] 기존 파일 존재", flush=True)
+    # 이미 둘 다 있으면 스킵
+    fnames = [f"{name}_{jumin6}_{t}.xlsx" for _, t in GANIYIYONG_TYPES]
+    if all((save_dir / fn).exists() for fn in fnames):
+        print(f"    [간이용역 스킵] 파일 모두 존재", flush=True)
         return True
 
-    # 0. 신고 안내자료 탭 클릭 (지급명세서 팝업 닫힌 후 탭이 초기화될 수 있음)
-    _click_anneam_tab(page)
+    # ── 메인 페이지 재확인 (pages[0]이 팝업인 경우 대비) ──
+    main_page = _find_main_page(ctx)
 
-    # 1. 간이용역 페이지로 이동
-    btn = page.locator(f"#{GANIYIYONG_BTN_ID}")
-    if not btn.is_visible(timeout=3000):
-        print(f"    [간이용역] 버튼 없음 - 스킵", flush=True)
-        return False
-    page.evaluate(f"document.getElementById('{GANIYIYONG_BTN_ID}').click()")
-    time.sleep(4)
+    # ── 팝업 찾기: 기존 열린 팝업 재사용 or 새로 열기 ──
+    gp = _find_ganiyiyong_popup(ctx)
+    if gp:
+        print(f"    [간이용역] 기존 팝업 재사용", flush=True)
+    else:
+        # 신고 안내자료 탭 클릭 (메인 페이지 기준)
+        _click_anneam_tab(main_page)
 
-    # 2. 조회 버튼 클릭
-    try:
-        inqr = page.locator("#mf_btnInqr")
-        if inqr.is_visible(timeout=5000):
-            inqr.click()
+        btn = main_page.locator(f"#{GANIYIYONG_BTN_ID}")
+        if not btn.is_visible(timeout=3000):
+            print(f"    [간이용역] 버튼 없음 - 스킵", flush=True)
+            return False
+
+        try:
+            with ctx.expect_page(timeout=10000) as page_info:
+                btn.click()
+            gp = page_info.value
+            gp.wait_for_load_state("domcontentloaded", timeout=15000)
             time.sleep(3)
+            print(f"    [간이용역] 팝업 열림: {gp.url[:60]}", flush=True)
+        except Exception as e:
+            # expect_page 실패 → 다시 한 번 찾기
+            gp = _find_ganiyiyong_popup(ctx)
+            if not gp:
+                print(f"    [간이용역] 팝업 열기 실패: {e}", flush=True)
+                return False
+
+    # ── dialog 핸들러: "조회된 데이터가 없습니다" alert accept + 기록 ──
+    _gp_no_data = []
+    def _gp_dialog(d):
+        _gp_no_data.append(d.message)
+        d.accept()
+    gp.on("dialog", _gp_dialog)
+
+    any_ok = False
+    for type_val, type_name in GANIYIYONG_TYPES:
+        fname = f"{name}_{jumin6}_{type_name}.xlsx"
+        save_path = save_dir / fname
+        if save_path.exists():
+            print(f"    [간이용역 스킵] {fname}", flush=True)
+            any_ok = True
+            continue
+        try:
+            _gp_no_data.clear()
+
+            # ── select 설정: DOM 방식 (scwin.$w는 객체이므로 함수 호출 불가) ──
+            set_result = gp.evaluate(f"""
+                () => {{
+                    const sel = document.getElementById('mf_mateKndCd');
+                    if (!sel) return 'select 없음';
+                    sel.value = '{type_val}';
+                    sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                    sel.dispatchEvent(new Event('input',  {{bubbles: true}}));
+                    return 'OK: ' + sel.value;
+                }}
+            """)
+            print(f"    [간이용역] {type_name} select: {set_result}", flush=True)
+            if 'select 없음' in str(set_result):
+                print(f"    [간이용역] select 없음 - 스킵", flush=True)
+                continue
+            time.sleep(0.8)
+
+            # ── 조회 버튼 클릭 ──
+            gp.locator("#mf_btnInqr").click()
+            time.sleep(4)
+
+            # ── 엑셀 다운로드: alert dialog 유무로 데이터 판단 ──
+            # (WebSquare 그리드 빈 행 5개가 기본 표시되므로 tbody tr 체크 불가)
+            dwld = gp.locator("#mf_btnDwld1")
+            if not dwld.is_visible(timeout=3000):
+                print(f"    [간이용역] {type_name} 다운로드 버튼 안 보임", flush=True)
+                continue
+
+            _gp_no_data.clear()
+            try:
+                with gp.expect_download(timeout=10000) as dl_info:
+                    dwld.click()
+                dl = dl_info.value
+                status, _ = safe_download(dl, save_dir, fname)
+                print(f"    [간이용역:{status}] {type_name} → {fname}", flush=True)
+                any_ok = True
+            except Exception:
+                time.sleep(1)  # dialog 처리 여유
+                if _gp_no_data:
+                    print(f"    [간이용역] {type_name} 자료없음 ({_gp_no_data[0][:30]})", flush=True)
+                else:
+                    print(f"    [간이용역] {type_name} 다운로드 타임아웃", flush=True)
+
+        except Exception as e:
+            print(f"    [간이용역] {type_name} 실패: {e}", flush=True)
+
+    try:
+        gp.remove_listener("dialog", _gp_dialog)
     except Exception:
         pass
 
-    # 3. 엑셀 내려받기 클릭
     try:
-        dwld_btn = page.locator("#mf_btnDwld1")
-        if not dwld_btn.is_visible(timeout=5000):
-            print(f"    [간이용역] 엑셀 버튼 없음 - 자료없음으로 간주", flush=True)
-            return False
-        with page.expect_download(timeout=10000) as dl_info:
-            dwld_btn.click()
-        dl = dl_info.value
-        status, _ = safe_download(dl, save_dir, f"{name}_{jumin6}.xlsx")
-        print(f"    [간이용역:{status}] {save_path}", flush=True)
-        return True
-    except Exception as e:
-        print(f"    [간이용역] 엑셀 다운로드 실패: {e}", flush=True)
-        return False
+        gp.close()
+    except Exception:
+        pass
+    return any_ok
 
 
 # -------------------- 고객 1명 처리 --------------------
@@ -742,10 +907,9 @@ def process_one(ctx, page, customer):
         except Exception as e:
             result["error_msg"] += f" [지급명세서:{type(e).__name__}:{str(e)[:80]}]"
 
-        # 6) 간이용역 엑셀 (페이지 이동 → 조회 → 엑셀)
-        # 주의: 이 단계 후 page URL이 바뀌므로 마지막에 실행
+        # 6) 간이용역 엑셀 (팝업 열기 → 사업소득/기타소득 각각 조회 → 엑셀)
         try:
-            ok = download_ganiyiyong_xlsx(page, folder, name, jumin_raw)
+            ok = download_ganiyiyong_xlsx(ctx, page, folder, name, jumin_raw)
             if not ok:
                 result["error_msg"] += " [간이용역:자료없음]"
         except Exception as e:
