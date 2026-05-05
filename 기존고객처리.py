@@ -25,8 +25,10 @@ import gspread
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 
 
-def load_기존_customers():
-    """구글시트 접수명단에서 고객구분=기존 + PDF 없는 고객만 반환"""
+def load_기존_customers(only_names: list = None):
+    """구글시트 접수명단에서 고객구분=기존 + PDF 없는 고객만 반환
+    only_names 지정 시 해당 이름만 처리 (미처리 전체 방지)
+    """
     creds = get_credentials()
     gc = gspread.authorize(creds)
     ws = gc.open_by_key(SPREADSHEET_ID).worksheet("접수명단")
@@ -40,6 +42,10 @@ def load_기존_customers():
         phone = str(r.get("핸드폰번호", "") or "").strip()
 
         if not name or 구분 != "기존":
+            continue
+
+        # 이름 필터 (지정 시 해당 이름만)
+        if only_names and name not in only_names:
             continue
 
         # PDF 존재 여부 확인
@@ -58,8 +64,13 @@ def load_기존_customers():
 
 
 def main():
-    print("[기존고객처리] 구글시트에서 처리 대상 조회 중...")
-    customers = load_기존_customers()
+    # 커맨드라인 인수로 이름 지정 시 해당 고객만 처리
+    only_names = sys.argv[1:] if len(sys.argv) > 1 else None
+    if only_names:
+        print(f"[기존고객처리] 지정 고객만 처리: {only_names}")
+    else:
+        print("[기존고객처리] 구글시트에서 처리 대상 조회 중...")
+    customers = load_기존_customers(only_names=only_names)
 
     if not customers:
         print("  → 처리할 고객 없음 (기존 고객 PDF 모두 완료)")

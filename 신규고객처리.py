@@ -44,8 +44,10 @@ INDIVIDUAL_REPORT_URL = (
 INDIVIDUAL_PREVIEW_BTN_ID = "#mf_txppWframe_trigger1"
 
 
-def load_신규_customers():
-    """구글시트 접수명단에서 고객구분=신규 + PDF 없는 고객만 반환"""
+def load_신규_customers(only_names: list = None):
+    """구글시트 접수명단에서 고객구분=신규 + PDF 없는 고객만 반환
+    only_names 지정 시 해당 이름만 처리 (미처리 전체 방지)
+    """
     creds = get_credentials()
     gc = gspread.authorize(creds)
     ws = gc.open_by_key(SPREADSHEET_ID).worksheet("접수명단")
@@ -63,6 +65,10 @@ def load_신규_customers():
         hometax_pw = str(r.get("홈택스비번", "") or "").strip()
 
         if not name or 구분 != "신규":
+            continue
+
+        # 이름 필터 (지정 시 해당 이름만)
+        if only_names and name not in only_names:
             continue
 
         # PDF 존재 여부 확인
@@ -343,8 +349,13 @@ def process_one_신규(ctx, page, customer: dict) -> dict:
 # -------------------- 메인 --------------------
 
 def main():
-    print("[신규고객처리] 구글시트에서 처리 대상 조회 중...")
-    customers = load_신규_customers()
+    # 커맨드라인 인수로 이름 지정 시 해당 고객만 처리
+    only_names = sys.argv[1:] if len(sys.argv) > 1 else None
+    if only_names:
+        print(f"[신규고객처리] 지정 고객만 처리: {only_names}")
+    else:
+        print("[신규고객처리] 구글시트에서 처리 대상 조회 중...")
+    customers = load_신규_customers(only_names=only_names)
 
     if not customers:
         print("  → 처리할 고객 없음 (신규 고객 PDF 모두 완료 또는 아이디/비번 미입력)")

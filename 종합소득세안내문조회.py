@@ -457,6 +457,194 @@ def download_vat(page, bizno, save_path):
     return True
 
 
+# -------------------- 지급명세서 / 간이용역 다운로드 --------------------
+
+JIPGUM_BTN_ID     = "mf_txppWframe_trigger8"
+JIPGUM_POPUP_ID   = "mf_txppWframe_UTERNAAT71"
+GANIYIYONG_BTN_ID = "mf_txppWframe_trigger2322"
+ANNEAM_TAB_ID     = "mf_txppWframe_tabControl1_tab_tabs3"  # 신고 안내자료 탭
+
+def _click_anneam_tab(page):
+    """신고 안내자료 탭 클릭 (지급명세서/간이용역 버튼 표시 전 필수)"""
+    try:
+        page.evaluate(f"document.getElementById('{ANNEAM_TAB_ID}').click()")
+        time.sleep(2)
+    except Exception:
+        pass
+
+def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
+    """지급명세서 등 제출내역 → 일괄출력 → PDF 저장
+    반환: True(성공) / False(자료없음·실패)
+    """
+    save_dir = folder / "지급명세서"
+    save_dir.mkdir(exist_ok=True)
+    jumin6 = str(jumin_raw).replace("-", "").replace(" ", "")[:6]
+    save_path = save_dir / f"{name}_{jumin6}.pdf"
+
+    if save_path.exists():
+        print(f"    [지급명세서PDF 스킵] 기존 파일 존재", flush=True)
+        return True
+
+    # 0. 신고 안내자료 탭 클릭
+    _click_anneam_tab(page)
+
+    # 1. 지급명세서 팝업 열기 (locator.click = user gesture → 팝업 화면 안에 정상 렌더)
+    btn = page.locator(f"#{JIPGUM_BTN_ID}")
+    if not btn.is_visible(timeout=3000):
+        print(f"    [지급명세서] 버튼 없음 - 스킵", flush=True)
+        return False
+    btn.click()
+    time.sleep(3)
+
+    # 2. 팝업 열렸는지 확인
+    popup_visible = page.evaluate(f"""
+        () => {{ const p = document.getElementById('{JIPGUM_POPUP_ID}'); return !!(p && p.offsetParent); }}
+    """)
+    if not popup_visible:
+        print(f"    [지급명세서] 팝업 미열림", flush=True)
+        return False
+
+    # 2-1. 개인정보 공개 설정 (scwin API 직접 호출)
+    page.evaluate(f"""
+        () => {{
+            const sc = window['{JIPGUM_POPUP_ID}_wframe_scwin'];
+            if (!sc) return;
+            // mskApplcYn 라디오 공개('1') 설정
+            try {{
+                const radio = sc['\$w'] && sc['\$w']('mskApplcYn');
+                if (radio && typeof radio.setValue === 'function') radio.setValue('1');
+            }} catch(e) {{}}
+            // DOM 방식 fallback
+            const pop = document.getElementById('{JIPGUM_POPUP_ID}');
+            if (!pop) return;
+            const radios = pop.querySelectorAll('input[type=radio]');
+            radios.forEach(r => {{
+                if (r.id && r.id.includes('mskApplcYn_input_1')) {{
+                    r.checked = true;
+                    r.dispatchEvent(new MouseEvent('click', {{bubbles:true}}));
+                    r.dispatchEvent(new Event('change', {{bubbles:true}}));
+                }}
+            }});
+        }}
+    """)
+    time.sleep(0.5)
+    print(f"    [지급명세서] 개인정보 공개 설정 완료", flush=True)
+
+    # 3. scwin의 trigger193_onclick_ev() 직접 호출 → ClipReport 창 열기
+    # (체크박스 선택 포함 전체 로직이 이 함수에 캡슐화됨)
+    # 4. 일괄출력 ClipReport4 팝업 감지 (ctx.pages 검색 방식)
+    try:
+        page.evaluate(f"""
+            () => {{
+                const sc = window['{JIPGUM_POPUP_ID}_wframe_scwin'];
+                if (sc && sc.trigger193_onclick_ev) {{
+                    sc.trigger193_onclick_ev();
+                }}
+            }}
+        """)
+        time.sleep(7)  # ClipReport 팝업 로드 여유
+
+        # ctx.pages에서 clipreport URL 검색 (expect_page 대신)
+        pdf_popup = next(
+            (pg for pg in ctx.pages if 'clipreport' in pg.url.lower()),
+            None
+        )
+        if not pdf_popup:
+            print(f"    [지급명세서] ClipReport 팝업 못 찾음 (ctx.pages: {[pg.url[:40] for pg in ctx.pages]})", flush=True)
+            try:
+                page.evaluate(f"document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger93').click()")
+            except Exception:
+                pass
+            return False
+
+        pdf_popup.wait_for_load_state("networkidle", timeout=20000)
+        time.sleep(3)
+        print(f"    [지급명세서] ClipReport 팝업 URL: {pdf_popup.url[:60]}", flush=True)
+
+        # ClipReport4 PDF 저장 버튼 클릭
+        with pdf_popup.expect_download(timeout=20000) as dl_info:
+            clicked = pdf_popup.evaluate("""
+                () => {
+                    const btn = document.querySelector('.report_menu_pdf_button');
+                    if (!btn) return false;
+                    btn.classList.remove('report_menu_pdf_button_svg_dis');
+                    btn.classList.add('report_menu_pdf_button_svg');
+                    btn.disabled = false;
+                    btn.click();
+                    return true;
+                }
+            """)
+            if not clicked:
+                pdf_popup.close()
+                print(f"    [지급명세서] PDF 버튼 못 찾음", flush=True)
+                return False
+        dl = dl_info.value
+        status, _ = safe_download(dl, save_dir, f"{name}_{jumin6}.pdf")
+        print(f"    [지급명세서PDF:{status}] {save_path}", flush=True)
+        pdf_popup.close()
+        return True
+
+    except Exception as e:
+        print(f"    [지급명세서] 일괄출력 실패: {e}", flush=True)
+        # 팝업 닫기
+        try:
+            page.evaluate(f"document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger93').click()")
+        except Exception:
+            pass
+        return False
+
+
+def download_ganiyiyong_xlsx(page, folder, name, jumin_raw):
+    """(간이·용역) 본인 소득내역 → 조회 → 엑셀 내려받기
+    반환: True(성공) / False(자료없음·실패)
+    주의: 이 함수 호출 후 page URL이 popup.html로 바뀜 → 다음 고객은 REPORT_HELP_URL 재접속 필요
+    """
+    save_dir = folder / "간이용역소득"
+    save_dir.mkdir(exist_ok=True)
+    jumin6 = str(jumin_raw).replace("-", "").replace(" ", "")[:6]
+    save_path = save_dir / f"{name}_{jumin6}.xlsx"
+
+    if save_path.exists():
+        print(f"    [간이용역 스킵] 기존 파일 존재", flush=True)
+        return True
+
+    # 0. 신고 안내자료 탭 클릭 (지급명세서 팝업 닫힌 후 탭이 초기화될 수 있음)
+    _click_anneam_tab(page)
+
+    # 1. 간이용역 페이지로 이동
+    btn = page.locator(f"#{GANIYIYONG_BTN_ID}")
+    if not btn.is_visible(timeout=3000):
+        print(f"    [간이용역] 버튼 없음 - 스킵", flush=True)
+        return False
+    page.evaluate(f"document.getElementById('{GANIYIYONG_BTN_ID}').click()")
+    time.sleep(4)
+
+    # 2. 조회 버튼 클릭
+    try:
+        inqr = page.locator("#mf_btnInqr")
+        if inqr.is_visible(timeout=5000):
+            inqr.click()
+            time.sleep(3)
+    except Exception:
+        pass
+
+    # 3. 엑셀 내려받기 클릭
+    try:
+        dwld_btn = page.locator("#mf_btnDwld1")
+        if not dwld_btn.is_visible(timeout=5000):
+            print(f"    [간이용역] 엑셀 버튼 없음 - 자료없음으로 간주", flush=True)
+            return False
+        with page.expect_download(timeout=10000) as dl_info:
+            dwld_btn.click()
+        dl = dl_info.value
+        status, _ = safe_download(dl, save_dir, f"{name}_{jumin6}.xlsx")
+        print(f"    [간이용역:{status}] {save_path}", flush=True)
+        return True
+    except Exception as e:
+        print(f"    [간이용역] 엑셀 다운로드 실패: {e}", flush=True)
+        return False
+
+
 # -------------------- 고객 1명 처리 --------------------
 
 def process_one(ctx, page, customer):
@@ -544,6 +732,24 @@ def process_one(ctx, page, customer):
             except Exception as e:
                 result["error_msg"] += f" [부가세 {bizno} 실패: {type(e).__name__}: {str(e)[:100]}]"
         result["vat_xlsx_count"] = vat_count
+
+        # 5) 지급명세서 PDF (일괄출력)
+        try:
+            jumin_raw = customer.get("jumin_raw", "")
+            ok = download_jipgum_pdf(ctx, page, folder, name, jumin_raw)
+            if not ok:
+                result["error_msg"] += " [지급명세서:자료없음]"
+        except Exception as e:
+            result["error_msg"] += f" [지급명세서:{type(e).__name__}:{str(e)[:80]}]"
+
+        # 6) 간이용역 엑셀 (페이지 이동 → 조회 → 엑셀)
+        # 주의: 이 단계 후 page URL이 바뀌므로 마지막에 실행
+        try:
+            ok = download_ganiyiyong_xlsx(page, folder, name, jumin_raw)
+            if not ok:
+                result["error_msg"] += " [간이용역:자료없음]"
+        except Exception as e:
+            result["error_msg"] += f" [간이용역:{type(e).__name__}:{str(e)[:80]}]"
 
         result["status"] = "완료" if not result["error_msg"] else "부분완료"
         return result
