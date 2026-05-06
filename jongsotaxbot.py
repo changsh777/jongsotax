@@ -6,8 +6,7 @@ jongsotaxbot.py - 종소세 작업 전용 텔레그램 봇 (@jongsotax_bot)
   /agree 강동수      진행 상태 조회
   /send 강동수       접수증+납부서 링크 발송 (게이트 포함)
   /pkg 강동수        출력패키지 PDF 재생성 (이름.xls + 검증보고서 필요)
-  /prev              2024년 신고서 없는 고객 목록
-  /prev 홍길동       홍길동 작업판 생성
+  /prev              2024년 신고서 없는 고객 목록 조회
   25강동수신고서.pdf 업로드 → NAS 신고서.pdf 저장 + 교차검증 + 출력패키지 자동 생성
 
 자동 흐름 (신고서 업로드 시):
@@ -119,8 +118,6 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await do_status(update, folder)
         elif action == "출력패키지":
             await do_pkg(update, context, folder)
-        elif action == "전신고서":
-            await do_전신고서_jakupan(update, folder)
     except ValueError:
         pass
     return True
@@ -773,61 +770,15 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
             )
 
 
-# ===== /전신고서 (2024년 귀속 신고서 없는 고객 목록 / 개인 작업판 생성) =====
-async def do_전신고서_jakupan(update: Update, folder: Path):
-    """동명이인 선택 후 작업판 생성 처리"""
-    import unicodedata
-    parts  = unicodedata.normalize("NFC", folder.name).rsplit("_", 1)
-    name   = parts[0]
-    jumin6 = parts[1][:6] if len(parts) > 1 else ""
-
-    import sys as _sys
-    _proj = str(Path(__file__).resolve().parent)
-    if _proj not in _sys.path:
-        _sys.path.insert(0, _proj)
-    from jakupan_gen import make_jakupan
-
-    loop = asyncio.get_event_loop()
-    try:
-        out = await loop.run_in_executor(
-            None, lambda: make_jakupan(name, jumin6)
-        )
-        if out:
-            await update.message.reply_text(f"✅ {name} 작업판 생성 완료: {out.name}")
-        else:
-            await update.message.reply_text(f"❌ {name} 작업판 생성 실패 (안내문 확인 필요)")
-    except Exception as e:
-        logger.error("[전신고서] make_jakupan 오류 %s: %s", name, e, exc_info=True)
-        await update.message.reply_text(f"❌ {name} 작업판 오류: {e}")
-
-
+# ===== /전신고서 (2024년 귀속 신고서 없는 고객 목록) =====
 async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /전신고서          → 2024년 신고서 없는 고객 목록 조회
-    /전신고서 홍길동   → 홍길동 작업판 생성
-    """
+    """/prev → 2024년 신고서 없는 고객 목록 조회"""
     if not is_allowed(update): return
     if not nas_ok():
         await nas_fail(update); return
 
     import unicodedata
 
-    name_arg = " ".join(context.args).strip() if context.args else ""
-
-    # ── 이름 지정: 해당 고객 작업판 생성 ─────────────────────────
-    if name_arg:
-        await update.message.reply_text(f"⚙️ {name_arg} 작업판 생성 중...")
-
-        folders = find_folders(name_arg)
-        if not folders:
-            await update.message.reply_text(f"❌ '{name_arg}' 폴더 없음"); return
-        if len(folders) > 1:
-            await ask_choice(update, update.effective_user.id, folders, "전신고서"); return
-
-        await do_전신고서_jakupan(update, folders[0])
-        return
-
-    # ── 이름 없음: 목록만 조회 ────────────────────────────────────
     await update.message.reply_text("⏳ 2024년 신고서 현황 조회 중...")
 
     missing: list[tuple[str, str]] = []
