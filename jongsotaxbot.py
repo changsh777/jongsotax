@@ -181,8 +181,10 @@ async def do_work(update: Update, folder: Path):
     await update.message.reply_text(f"📁 {folder.name} — {len(files_to_send)}개 전송 중...")
     for f in files_to_send:
         try:
+            # xlsx → xls 확장자 변환 (파일명만, 바이트 그대로)
+            fname = f.name[:-1] if f.name.endswith(".xlsx") else f.name
             with open(f, "rb") as fp:
-                await update.message.reply_document(document=fp, filename=f.name)
+                await update.message.reply_document(document=fp, filename=fname)
         except Exception as e:
             await update.message.reply_text(f"❌ {f.name} 실패: {e}")
     await update.message.reply_text("✅ 전송 완료")
