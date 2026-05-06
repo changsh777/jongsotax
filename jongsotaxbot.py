@@ -891,6 +891,28 @@ async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(chunk.rstrip())
 
 
+# ===== 자정 배치: 혼입 검증 =====
+async def job_integrity_check(context: ContextTypes.DEFAULT_TYPE):
+    """매일 자정 verify_folder_integrity.py --fix 실행 → ADMIN에게 결과 전송"""
+    import subprocess
+    script = Path(__file__).resolve().parent / "verify_folder_integrity.py"
+    try:
+        result = subprocess.run(
+            [_sys.executable, str(script), "--fix"],
+            capture_output=True, text=True, encoding="utf-8", timeout=600
+        )
+        output = (result.stdout or result.stderr or "(출력 없음)").strip()
+    except Exception as e:
+        output = f"실행 오류: {e}"
+
+    header = "혼입 검증 결과\n\n"
+    msg = header + output
+    MAX = 4096
+    while msg:
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=msg[:MAX])
+        msg = msg[MAX:]
+
+
 # ===== 텍스트: 동명이인 번호 선택 =====
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
@@ -903,6 +925,11 @@ def main():
         logger.warning("NAS 미연결: %s", NAS_BASE)
 
     app = Application.builder().token(TOKEN).build()
+
+    # 매일 자정(KST) 혼입 검증 — UTC 15:00 = KST 00:00
+    from datetime import time as _dtime
+    app.job_queue.run_daily(job_integrity_check, time=_dtime(hour=15, minute=0))
+
     app.add_handler(CommandHandler("work",    cmd_work))          # /work 강동수
     app.add_handler(CommandHandler("agree",   cmd_status))        # /agree 강동수
     app.add_handler(CommandHandler("send",    cmd_send))          # /send 강동수
