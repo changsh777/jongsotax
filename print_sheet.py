@@ -109,17 +109,22 @@ def apply_border(ws, r1, r2, c1, c2):
 
 # ── 데이터 읽기 ─────────────────────────────────────────────────
 def find_folder(name, jumin6):
-    candidates = list(CUSTOMER_DIR.glob(f"{name}_*"))
+    import unicodedata
+    def nfc(s): return unicodedata.normalize("NFC", str(s))
+    name_nfc = nfc(name)
+    # glob 대신 iterdir + NFC 비교 (Mac SMB NFD 대응)
+    candidates = [
+        p for p in CUSTOMER_DIR.iterdir()
+        if p.is_dir() and nfc(p.name).startswith(f"{name_nfc}_")
+    ]
     if not candidates:
         p = CUSTOMER_DIR / name
         return p if p.is_dir() else None
     if jumin6:
-        exact = [c for c in candidates
-                 if c.name.endswith(f"_{jumin6}") and c.is_dir()]
+        exact = [c for c in candidates if nfc(c.name).endswith(f"_{jumin6}")]
         if exact:
             return exact[0]
-    dirs = [c for c in candidates if c.is_dir()]
-    return dirs[0] if dirs else None
+    return candidates[0] if candidates else None
 
 
 def find_anneam(folder):
