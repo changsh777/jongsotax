@@ -295,9 +295,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_25_singoser:
         return  # 조건 불만족 → 무시
 
-    # 고객명: 캡션 우선, 없으면 파일명에서 추출
+    # 고객명: 캡션 우선, 없으면 파일명 마지막 _뒤에서 추출
+    # ex) "25년 종합소득세신고서_김지은" → "김지은"
     caption = (update.message.caption or "").strip()
-    name    = caption if caption else Path(fname).stem.strip()
+    if caption:
+        name = caption
+    else:
+        stem = Path(fname).stem.strip()
+        name = stem.rsplit("_", 1)[-1] if "_" in stem else stem
 
     if not nas_ok():
         await nas_fail(update); return
