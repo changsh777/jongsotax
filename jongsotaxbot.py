@@ -6,7 +6,6 @@ jongsotaxbot.py - 종소세 작업 전용 텔레그램 봇 (@jongsotax_bot)
   /agree 강동수      진행 상태 조회
   /send 강동수       접수증+납부서 링크 발송 (게이트 포함)
   /pkg 강동수        출력패키지 PDF 재생성 (이름.xls + 검증보고서 필요)
-  /prev              2024년 신고서 없는 고객 목록 조회
   25강동수신고서.pdf 업로드 → NAS 신고서.pdf 저장 + 교차검증 + 출력패키지 자동 생성
 
 자동 흐름 (신고서 업로드 시):
@@ -114,6 +113,9 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await do_send(update, folder)
         elif action == "신고서":
             await do_save_singoser(update, context, folder, extra)
+        elif action == "전기신고서":
+            tg_file, fname = extra
+            await do_save_전기신고서(update, folder, tg_file, fname)
         elif action == "수임동의":
             await do_status(update, folder)
         elif action == "출력패키지":
@@ -664,19 +666,32 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fname = doc.file_name or ""
     fname_lower = fname.lower()
 
-    # 25년 신고서만 처리 (파일명에 "25"+"신고서" 둘 다 있어야)
+    # 25년 신고서 또는 2024 전기신고서 처리
     is_25_singoser = "25" in fname and "신고서" in fname_lower
-    if not is_25_singoser:
+    is_전기신고서  = "2024" in fname and "신고서" in fname_lower
+
+    if not is_25_singoser and not is_전기신고서:
         return  # 조건 불만족 → 무시
 
-    # 고객명: 캡션 우선, 없으면 파일명 마지막 _뒤에서 추출
-    # ex) "25년 종합소득세신고서_김지은" → "김지은"
     caption = (update.message.caption or "").strip()
-    if caption:
-        name = caption
+
+    if is_25_singoser:
+        # 고객명: 캡션 우선, 없으면 파일명 마지막 _뒤에서 추출
+        # ex) "25년 종합소득세신고서_김지은" → "김지은"
+        if caption:
+            name = caption
+        else:
+            stem = Path(fname).stem.strip()
+            name = stem.rsplit("_", 1)[-1] if "_" in stem else stem
     else:
-        stem = Path(fname).stem.strip()
-        name = stem.rsplit("_", 1)[-1] if "_" in stem else stem
+        # 전기신고서: 캡션 우선, 없으면 파일명에서 "2024"/"종합소득세"/"신고서" 제거
+        import re
+        if caption:
+            name = caption
+        else:
+            stem = Path(fname).stem
+            cleaned = re.sub(r'2024|종합소득세|신고서', '', stem)
+            name = cleaned.strip()
 
     if not nas_ok():
         await nas_fail(update); return
@@ -687,11 +702,17 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tg_file = await doc.get_file()
 
-    if len(folders) > 1:
-        await ask_choice(update, update.effective_user.id, folders, "신고서", tg_file)
-        return
-
-    await do_save_singoser(update, context, folders[0], tg_file)
+    if is_25_singoser:
+        if len(folders) > 1:
+            await ask_choice(update, update.effective_user.id, folders, "신고서", tg_file)
+            return
+        await do_save_singoser(update, context, folders[0], tg_file)
+    else:
+        if len(folders) > 1:
+            await ask_choice(update, update.effective_user.id, folders, "전기신고서",
+                             (tg_file, fname))
+            return
+        await do_save_전기신고서(update, folders[0], tg_file, fname)
 
 
 async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Path, tg_file):
@@ -770,76 +791,20 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
             )
 
 
-# ===== /전신고서 (2024년 귀속 신고서 없는 고객 목록) =====
-async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/prev → 2024년 신고서 없는 고객 목록 조회"""
-    if not is_allowed(update): return
-    if not nas_ok():
-        await nas_fail(update); return
+async def do_save_전기신고서(update: Update, folder: Path, tg_file, fname: str):
+    """전기신고서 PDF 폴더 저장 (교차검증 없음)"""
+    target  = folder / fname
+    archive = folder / "_archive"
 
-    import unicodedata
+    if target.exists():
+        archive.mkdir(exist_ok=True)
+        ts = datetime.fromtimestamp(target.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+        target.rename(archive / f"{Path(fname).stem}_{ts}.pdf")
+        logger.info("archive 이동: %s_%s.pdf", Path(fname).stem, ts)
 
-    await update.message.reply_text("⏳ 2024년 신고서 현황 조회 중...")
-
-    missing: list[tuple[str, str]] = []
-
-    try:
-        folders = sorted(
-            p for p in NAS_BASE.iterdir()
-            if p.is_dir() and not p.name.startswith("_")
-        )
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ 폴더 스캔 실패: {e}")
-        return
-
-    for folder in folders:
-        folder_nfc = unicodedata.normalize("NFC", folder.name)
-        parts  = folder_nfc.rsplit("_", 1)
-        name   = parts[0]
-        jumin6 = parts[1][:6] if len(parts) > 1 else ""
-
-        has_singoser = False
-        try:
-            for f in folder.iterdir():
-                if not f.is_file(): continue
-                fname_nfc = unicodedata.normalize("NFC", f.name)
-                if (
-                    "신고서" in fname_nfc
-                    and fname_nfc.lower().endswith(".pdf")
-                    and ("202401" in fname_nfc or "2024" in fname_nfc)
-                ):
-                    has_singoser = True
-                    break
-        except Exception:
-            pass
-
-        if not has_singoser:
-            missing.append((name, jumin6))
-
-    total = len(missing)
-    if total == 0:
-        await update.message.reply_text("✅ 2024년 신고서 없는 고객 없음 (모두 완료)")
-        return
-
-    header = f"📋 2024년 신고서 없는 고객 ({total}명)\n\n"
-    lines  = [f"{i+1}. {name} ({jumin6})" for i, (name, jumin6) in enumerate(missing)]
-    body   = "\n".join(lines)
-    full   = header + body
-
-    MAX = 4096
-    if len(full) <= MAX:
-        await update.message.reply_text(full)
-    else:
-        chunk = header
-        for line in lines:
-            candidate = chunk + line + "\n"
-            if len(candidate) > MAX:
-                await update.message.reply_text(chunk.rstrip())
-                chunk = line + "\n"
-            else:
-                chunk = candidate
-        if chunk.strip():
-            await update.message.reply_text(chunk.rstrip())
+    await tg_file.download_to_drive(str(target))
+    logger.info("전기신고서 저장: %s", target)
+    await update.message.reply_text(f"✅ {folder.name}/{fname} 저장 완료")
 
 
 # ===== 자정 배치: 혼입 검증 =====
@@ -885,7 +850,6 @@ def main():
     app.add_handler(CommandHandler("agree",   cmd_status))        # /agree 강동수
     app.add_handler(CommandHandler("send",    cmd_send))          # /send 강동수
     app.add_handler(CommandHandler("pkg",     cmd_pkg))           # /pkg 강동수 (출력패키지 재생성)
-    app.add_handler(CommandHandler("prev", cmd_전신고서))          # /prev [이름] (2024년 신고서 현황 / 작업판 생성)
     app.add_handler(MessageHandler(filters.Document.ALL,            handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
