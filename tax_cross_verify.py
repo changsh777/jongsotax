@@ -211,31 +211,53 @@ def parse_tax_return(pdf_path: Path) -> dict:
 
 
 def parse_anneam(pdf_path: Path) -> dict:
-    """안내문 PDF → 수입금액, 기장의무, 추계경비율, 기납부세액"""
+    """안내문 PDF → 수입금액, 기장의무, 추계경비율, 기납부세액, 공제참고자료"""
     result = {}
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            text = pdf.pages[0].extract_text() or ""
+            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            text0 = pdf.pages[0].extract_text() or ""
     except Exception:
         return result
 
     # 수입금액
-    m_total = re.search(r'총계\s+([\d,]+)', text)
+    m_total = re.search(r'총계\s+([\d,]+)', text0)
     if m_total:
         result["수입금액"] = int(m_total.group(1).replace(",", ""))
 
     # 기장의무
-    m_gij = re.search(r'기장의무\s+(간편장부대상자|복식부기의무자)', text)
+    m_gij = re.search(r'기장의무\s+(간편장부대상자|복식부기의무자)', text0)
     result["기장의무"] = m_gij.group(1) if m_gij else ""
 
     # 추계경비율
-    m_choegye = re.search(r'추계시적용경비율\s+(기준경비율|단순경비율)', text)
+    m_choegye = re.search(r'추계시적용경비율\s+(기준경비율|단순경비율)', text0)
     result["추계경비율"] = m_choegye.group(1) if m_choegye else ""
 
     # 원천징수세액 (기납부세액) — 줄바꿈 포함 탐색
     m_pre = re.search(r'원천징수세액\D{0,20}?([\d,]{4,})원', text, re.DOTALL)
     if m_pre:
         result["기납부세액"] = int(m_pre.group(1).replace(",", ""))
+
+    # ── 공제 참고자료 ─────────────────────────────────────────────
+    def _amt(pattern):
+        m = re.search(pattern, text, re.DOTALL)
+        if m:
+            v = m.group(1).replace(",", "")
+            try: return int(v)
+            except: return None
+        return None
+
+    # 소득공제
+    result["국민연금보험료"]   = _amt(r'국민연금보험료\s*([\d,]+)원')
+    result["개인연금저축"]     = _amt(r'개인연금저축\s*([\d,]+)원')
+    result["노란우산공제"]     = _amt(r'소기업소상공인공제부금[^\d]*([\d,]+)원')
+
+    # 세액공제
+    result["퇴직연금세액공제"] = _amt(r'퇴직연금세액공제\s*([\d,]+)원')
+    result["연금계좌세액공제"] = _amt(r'연금계좌세[액금]?세액공제\s*([\d,]+)원')
+
+    # 중간예납세액
+    result["중간예납세액"]     = _amt(r'중간예납세액\s*([\d,]+)원')
 
     return result
 
@@ -698,7 +720,7 @@ def generate_html(
   </table>
 </div>"""
 
-    # 신고서 비교표
+    # 신고서 비교표 + 안내문 공제 체크
     당기_yr = 당기신고서.get("귀속연도", "당기")
     전기_yr = 전기신고서.get("귀속연도", "전기") if 전기신고서 else "—"
     compare_fields = [
@@ -723,6 +745,24 @@ def generate_html(
             return f"{v / base * 100:.1f}%"
         return ""
 
+    # 안내문 자동 체크 가능 항목: 신고서 key → 안내문 key
+    안내문_매핑 = {
+        "총수입금액": "수입금액",
+        "기납부세액": "기납부세액",
+    }
+    # 소득공제·세액공제 세부항목 (안내문 값 표시 + 수동 확인)
+    공제_서브항목 = {
+        "소득공제": [
+            ("↳ 국민연금보험료", "국민연금보험료", "❓ 확인"),
+            ("↳ 개인연금저축",   "개인연금저축",   "❓ 확인"),
+            ("↳ 노란우산공제",   "노란우산공제",   "❓ 한도 500만"),
+        ],
+        "세액공제": [
+            ("↳ 퇴직연금세액공제", "퇴직연금세액공제", "❓ 확인"),
+            ("↳ 연금계좌세액공제", "연금계좌세액공제", "❓ 확인"),
+        ],
+    }
+
     compare_rows = ""
     for label, key in compare_fields:
         v_당 = 당기신고서.get(key)
@@ -735,15 +775,26 @@ def generate_html(
         pct_당 = _pct(v_당, rev_당_base)
         pct_style = ' style="color:#c62828"' if key == "소득금액" else ""
 
-        # 증감 색상 결정
+        # 증감 색상
         if diff is None:
             diff_color = "#555"
         elif diff < 0:
-            diff_color = "#c62828"   # 감소 → 빨강
+            diff_color = "#c62828"
         elif diff > 0:
-            diff_color = "#2e7d32"   # 증가 → 초록
+            diff_color = "#2e7d32"
         else:
             diff_color = "#555"
+
+        # 안내문 값 + 체크 아이콘
+        안내_key = 안내문_매핑.get(key)
+        v_안내 = 안내문_data.get(안내_key) if 안내_key else None
+        안내_str = f"{v_안내:,}" if isinstance(v_안내, int) else "—"
+        if v_안내 is not None and isinstance(v_당, int):
+            체크_str = ('<span style="color:#2e7d32;font-weight:bold">✓</span>'
+                        if v_당 == v_안내 else
+                        '<span style="color:#c62828;font-weight:bold">✗</span>')
+        else:
+            체크_str = ""
 
         compare_rows += f"""
 <tr>
@@ -755,11 +806,29 @@ def generate_html(
   <td class="num" style="color:{diff_color}">
     {f'{diff:+,}' if isinstance(diff, int) else _fmt(diff)}
   </td>
+  <td class="num">{안내_str}</td>
+  <td style="text-align:center">{체크_str}</td>
+</tr>"""
+
+        # 공제 세부항목 sub-rows (안내문에 값이 있을 때만)
+        for sub_label, sub_key, sub_check in 공제_서브항목.get(key, []):
+            v_sub = 안내문_data.get(sub_key)
+            if v_sub is not None:
+                compare_rows += f"""
+<tr style="background:#f5f5ff">
+  <td style="padding-left:22px; color:#5c6bc0; font-size:11px">{sub_label}</td>
+  <td class="num" style="color:#bbb">—</td>
+  <td class="num"></td>
+  <td class="num" style="color:#bbb">—</td>
+  <td class="num"></td>
+  <td class="num"></td>
+  <td class="num" style="color:#5c6bc0; font-weight:bold">{v_sub:,}</td>
+  <td style="text-align:center; color:#e65100; font-size:11px">{sub_check}</td>
 </tr>"""
 
     신고서_html = f"""
 <div class="section">
-  <div class="sec-hdr">신고서 전기↔당기 비교</div>
+  <div class="sec-hdr">신고서 전기↔당기 비교 + 안내문 공제 체크</div>
   <table>
     <tr>
       <th style="text-align:left">항목</th>
@@ -768,6 +837,8 @@ def generate_html(
       <th>{당기_yr}년 (당기)</th>
       <th style="color:#888;font-weight:normal">%</th>
       <th>증감</th>
+      <th>안내문</th>
+      <th>체크</th>
     </tr>
     {compare_rows}
   </table>
