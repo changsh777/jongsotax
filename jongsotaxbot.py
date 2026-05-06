@@ -684,14 +684,18 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stem = Path(fname).stem.strip()
             name = stem.rsplit("_", 1)[-1] if "_" in stem else stem
     else:
-        # 전기신고서: 캡션 우선, 없으면 파일명에서 "2024"/"종합소득세"/"신고서" 제거
+        # 전기신고서: 캡션 우선, 없으면 _이름 패턴 우선, 없으면 키워드 제거
+        # ex) "2024 종합소득세신고서_김지혁" → "김지혁"
         import re
         if caption:
             name = caption
         else:
             stem = Path(fname).stem
-            cleaned = re.sub(r'2024|종합소득세|신고서', '', stem)
-            name = cleaned.strip()
+            if '_' in stem:
+                name = stem.rsplit('_', 1)[-1].strip()
+            else:
+                cleaned = re.sub(r'2024|종합소득세|신고서', '', stem)
+                name = cleaned.strip()
 
     if not nas_ok():
         await nas_fail(update); return
