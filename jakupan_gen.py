@@ -139,8 +139,11 @@ def detect_income_from_files(folder: Path) -> set:
 def fill_puri(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw, file_income_types=None):
     """프리 시트 노랑셀 자동 입력"""
 
-    # 초기화
+    # 초기화 (수식 셀은 보존)
     for addr in CLEAR_CELLS:
+        v = ws_puri[addr].value
+        if isinstance(v, str) and v.startswith('='):
+            continue  # 수식 보존
         ws_puri[addr].value = None
 
     # 성명
@@ -328,6 +331,19 @@ def make_jakupan(name, jumin6="", force_jangbu: str = ""):
 
     # 작업준비 시트 추가
     add_jakupjunbi_sheet(wb, name, jumin6, folder)
+
+    # 열 숨김 처리 (직원용 — 참조 테이블 숨김)
+    ws_puri = wb[sheet_name]
+    is_복식 = "복식" in sheet_name
+    if is_복식:
+        # 복식부기: L~S열 숨김
+        for col in range(12, 20):  # L=12, S=19
+            ws_puri.column_dimensions[get_column_letter(col)].hidden = True
+    else:
+        # 간편장부: J열~끝 숨김
+        max_col = ws_puri.max_column
+        for col in range(10, max_col + 1):  # J=10
+            ws_puri.column_dimensions[get_column_letter(col)].hidden = True
 
     # 저장
     out = folder / f"작업판_{name}.xlsx"
