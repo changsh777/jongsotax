@@ -242,20 +242,27 @@ def parse_anneam(pdf_path: Path) -> dict:
 
 def parse_income_excel(xlsx_path: Path, jumin6: str = "") -> list:
     """지급명세서 xlsx → list of dict {사업자번호, 징수의무자, 지급총액, 소득세, 지방소득세}"""
-    import msoffcrypto, io as _io
+    import io as _io
+    try:
+        import msoffcrypto as _msoffcrypto
+    except ImportError:
+        _msoffcrypto = None
 
     rows = []
     try:
         with open(xlsx_path, "rb") as f:
             raw = f.read()
-        try:
-            of = msoffcrypto.OfficeFile(_io.BytesIO(raw))
-            is_enc = of.is_encrypted()
-        except Exception:
-            is_enc = False
 
-        if is_enc and jumin6:
-            of2 = msoffcrypto.OfficeFile(_io.BytesIO(raw))
+        is_enc = False
+        if _msoffcrypto:
+            try:
+                of = _msoffcrypto.OfficeFile(_io.BytesIO(raw))
+                is_enc = of.is_encrypted()
+            except Exception:
+                is_enc = False
+
+        if is_enc and jumin6 and _msoffcrypto:
+            of2 = _msoffcrypto.OfficeFile(_io.BytesIO(raw))
             dec = _io.BytesIO()
             of2.load_key(password=jumin6)
             of2.decrypt(dec)
