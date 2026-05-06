@@ -82,8 +82,11 @@ def classify_files(folder: Path) -> dict:
             result["기타"].append(f)
 
     # 하위 폴더 (지급명세서/, 간이용역소득/, 자료/)
+    # _archive/, _temp/ 등 밑줄로 시작하는 폴더는 스캔 제외
     for sub in folder.iterdir():
         if not sub.is_dir():
+            continue
+        if sub.name.startswith("_"):   # _archive, _temp 등 제외
             continue
         for f in sub.rglob("*"):
             if not f.is_file():
@@ -1028,6 +1031,15 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
     당기신고서 = 신고서_list[-1] if 신고서_list else {}
     전기신고서 = 신고서_list[-2] if len(신고서_list) >= 2 else None
 
+    # 전기신고서 유효성 체크: 과세표준이 총수입금액보다 크면 파싱 오류로 간주
+    if 전기신고서:
+        _rev = 전기신고서.get("총수입금액")
+        _base = 전기신고서.get("과세표준")
+        if isinstance(_rev, int) and isinstance(_base, int) and _rev > 0 and _base > _rev:
+            print(f"    ⚠ 전기신고서 파싱 이상 감지 ({전기신고서.get('파일')})")
+            print(f"      총수입금액 {_rev:,} < 과세표준 {_base:,} → 전기 데이터 무시")
+            전기신고서 = None
+
     # ── 3. 안내문 파싱 ────────────────────────────────────────────
     print(f"\n[3] 안내문 PDF 파싱")
     안내문_data = {}
@@ -1067,8 +1079,14 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
 
     # ── 7. HTML 보고서 생성 ───────────────────────────────────────
     print(f"\n[7] HTML 보고서 생성")
+
+    # 파일 인식 결과에서 신고서는 중복 제거 후 목록만 표시
+    dedup_신고서_paths = {sr["_path"] for sr in 신고서_list if "_path" in sr}
+    files_for_html = dict(files)
+    files_for_html["신고서"] = [p for p in files["신고서"] if p in dedup_신고서_paths]
+
     html = generate_html(
-        name, jumin6, files,
+        name, jumin6, files_for_html,
         당기신고서, 전기신고서, 안내문_data,
         지급명세서, 카드_목록, results,
     )
