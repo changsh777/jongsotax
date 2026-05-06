@@ -26,11 +26,13 @@ from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes
 )
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import CUSTOMER_DIR as NAS_BASE
 
 # ===== 설정 =====
 TOKEN          = "REDACTED_TOKEN_1"
 ADMIN_CHAT_ID  = 5980411081    # 세무사 (관리자)
-NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")   # Mac Mini NAS 마운트 경로
 NAS_URL        = "https://nas.taxenglab.com/종소세2026/고객"    # Cloudflare URL
 
 ALLOWED_USERS: list[int] = []  # 빈 리스트 = 전체 허용

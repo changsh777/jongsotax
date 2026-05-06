@@ -1034,14 +1034,7 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
     당기신고서 = 신고서_list[-1] if 신고서_list else {}
     전기신고서 = 신고서_list[-2] if len(신고서_list) >= 2 else None
 
-    # 전기신고서 유효성 체크: 과세표준이 총수입금액보다 크면 파싱 오류로 간주
-    if 전기신고서:
-        _rev = 전기신고서.get("총수입금액")
-        _base = 전기신고서.get("과세표준")
-        if isinstance(_rev, int) and isinstance(_base, int) and _rev > 0 and _base > _rev:
-            print(f"    ⚠ 전기신고서 파싱 이상 감지 ({전기신고서.get('파일')})")
-            print(f"      총수입금액 {_rev:,} < 과세표준 {_base:,} → 전기 데이터 무시")
-            전기신고서 = None
+    # 유효성 체크 제거: 근로+사업 복수소득 시 과세표준 > 사업소득 수입금액이 정상 케이스
 
     # ── 3. 안내문 파싱 ────────────────────────────────────────────
     print(f"\n[3] 안내문 PDF 파싱")
