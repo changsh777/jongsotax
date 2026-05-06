@@ -262,8 +262,8 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
     """
     출력패키지 PDF 생성 (동기 — run_in_executor 로 호출):
       1. 검증보고서 (HTML → PDF)
-      2. 소득시트   (이름.xls WORKPAN_SHEETS 시트 → PDF)
-      3. 작업준비시트 (이름.xls 작업준비_* 시트 → PDF)
+      2. 소득시트   (작업결과_이름.xls WORKPAN_SHEETS 시트 → PDF)
+      3. 작업준비시트 (작업결과_이름.xls 작업준비_* 시트 → PDF)
       4. 안내문 1페이지
       → 합쳐서 출력패키지_{이름}_{날짜}.pdf 저장 후 경로 반환
     """
@@ -662,8 +662,10 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc:
         return
 
+    import unicodedata
     fname = doc.file_name or ""
-    fname_lower = fname.lower()
+    fname_nfc   = unicodedata.normalize("NFC", fname)   # Mac NFD 대응
+    fname_lower = fname_nfc.lower()
 
     # ── 작업결과 엑셀: 작업결과_이름.xls / .xlsx ──────────────────
     is_작업결과 = (
@@ -671,8 +673,8 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (fname_lower.endswith(".xls") or fname_lower.endswith(".xlsx"))
     )
     if is_작업결과:
-        stem = Path(fname).stem            # 작업결과_홍길동
-        name = stem[len("작업결과_"):]    # 홍길동
+        stem = Path(fname_nfc).stem             # 작업결과_홍길동
+        name = stem[len("작업결과_"):]         # 홍길동
         if not name:
             await update.message.reply_text("파일명 오류: 작업결과_이름.xls 형식으로 올려주세요.")
             return
