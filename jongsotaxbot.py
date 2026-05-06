@@ -6,7 +6,7 @@ jongsotaxbot.py - 종소세 작업 전용 텔레그램 봇 (@jongsotax_bot)
   /agree 강동수      진행 상태 조회
   /send 강동수       접수증+납부서 링크 발송 (게이트 포함)
   /pkg 강동수        출력패키지 PDF 재생성 (이름.xls + 검증보고서 필요)
-  /전신고서          2024년 귀속 신고서 없는 고객 목록 조회
+  /전신고서          2024년 귀속 신고서 없는 고객 목록 조회 + 작업판 배치 생성
   25강동수신고서.pdf 업로드 → NAS 신고서.pdf 저장 + 교차검증 + 출력패키지 자동 생성
 
 자동 흐름 (신고서 업로드 시):
@@ -770,9 +770,10 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
             )
 
 
-# ===== /전신고서 (2024년 귀속 신고서 없는 고객 목록) =====
+# ===== /전신고서 (2024년 귀속 신고서 없는 고객 목록 + 작업판 배치 생성) =====
 async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """CUSTOMER_DIR 전체 폴더 스캔 → 2024년 귀속 신고서 PDF 없는 고객 목록 전송"""
+    """CUSTOMER_DIR 전체 폴더 스캔 → 2024년 귀속 신고서 PDF 없는 고객
+    목록 전송 + 작업판 배치 생성 (덮어쓰기, 안내문 자동 파싱)"""
     if not is_allowed(update): return
     if not nas_ok():
         await nas_fail(update); return
@@ -781,11 +782,12 @@ async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("⏳ 2024년 신고서 현황 조회 중...")
 
-    missing: list[tuple[str, str]] = []  # (이름, 주민앞6)
+    missing: list[tuple[str, str, Path]] = []  # (이름, 주민앞6, folder)
 
     try:
         folders = sorted(
-            p for p in NAS_BASE.iterdir() if p.is_dir()
+            p for p in NAS_BASE.iterdir()
+            if p.is_dir() and not p.name.startswith("_")
         )
     except Exception as e:
         await update.message.reply_text(f"⚠️ 폴더 스캔 실패: {e}")
@@ -793,12 +795,10 @@ async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for folder in folders:
         folder_nfc = unicodedata.normalize("NFC", folder.name)
-        # 폴더명 형식: 이름_주민앞6
         parts = folder_nfc.rsplit("_", 1)
-        name  = parts[0]
+        name   = parts[0]
         jumin6 = parts[1][:6] if len(parts) > 1 else ""
 
-        # 해당 폴더 내 파일 중 신고서 PDF 찾기
         has_singoser = False
         try:
             for f in folder.iterdir():
@@ -813,22 +813,22 @@ async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     has_singoser = True
                     break
         except Exception:
-            pass  # 접근 불가 폴더 스킵
+            pass
 
         if not has_singoser:
-            missing.append((name, jumin6))
+            missing.append((name, jumin6, folder))
 
     total = len(missing)
     if total == 0:
         await update.message.reply_text("✅ 2024년 신고서 없는 고객 없음 (모두 완료)")
         return
 
+    # ── 목록 보고 ────────────────────────────────────────────────
     header = f"📋 2024년 신고서 없는 고객 ({total}명)\n\n"
-    lines  = [f"{i+1}. {name} ({jumin6})" for i, (name, jumin6) in enumerate(missing)]
+    lines  = [f"{i+1}. {name} ({jumin6})" for i, (name, jumin6, _) in enumerate(missing)]
     body   = "\n".join(lines)
     full   = header + body
 
-    # 4096자 초과 시 분할 전송
     MAX = 4096
     if len(full) <= MAX:
         await update.message.reply_text(full)
@@ -843,6 +843,42 @@ async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chunk = candidate
         if chunk.strip():
             await update.message.reply_text(chunk.rstrip())
+
+    # ── 작업판 배치 생성 ─────────────────────────────────────────
+    await update.message.reply_text(f"⚙️ 작업판 {total}명 배치 생성 시작...")
+
+    import sys as _sys
+    _proj = str(Path(__file__).resolve().parent)
+    if _proj not in _sys.path:
+        _sys.path.insert(0, _proj)
+    from jakupan_gen import make_jakupan
+
+    done:   list[str] = []
+    failed: list[str] = []
+    loop = asyncio.get_event_loop()
+
+    for i, (name, jumin6, _folder) in enumerate(missing, 1):
+        try:
+            out = await loop.run_in_executor(
+                None, lambda n=name, j=jumin6: make_jakupan(n, j)
+            )
+            if out:
+                done.append(name)
+            else:
+                failed.append(f"{name} (생성 실패)")
+        except Exception as e:
+            logger.error("[전신고서] make_jakupan 오류 %s: %s", name, e, exc_info=True)
+            failed.append(f"{name} ({e})")
+
+        if i % 10 == 0:
+            await update.message.reply_text(f"⏳ {i}/{total} 처리 중...")
+
+    # ── 최종 보고 ────────────────────────────────────────────────
+    report = f"✅ 작업판 배치 생성 완료\n완료 {len(done)}명 / 실패 {len(failed)}명"
+    if failed:
+        fail_lines = "\n".join(f"  • {f}" for f in failed)
+        report += f"\n\n❌ 실패 목록:\n{fail_lines}"
+    await update.message.reply_text(report)
 
 
 # ===== 텍스트: 동명이인 번호 선택 =====
