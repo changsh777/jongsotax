@@ -10,6 +10,7 @@ tax_cross_verify.py  —  종소세 교차검증 보고서 생성기
   고객폴더/검증보고서_YYYYMMDD_HHMM.html
 """
 
+from __future__ import annotations
 import sys, io, os, re
 from pathlib import Path
 from datetime import datetime
