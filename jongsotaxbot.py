@@ -147,26 +147,31 @@ async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def do_work(update: Update, folder: Path):
     """안내문 + 전년도자료 + 작업판 + 지급명세서 + 간이용역소득 전송"""
+    import unicodedata
+    def nfc(s): return unicodedata.normalize("NFC", str(s))
+
     files_to_send = []
+    root_files = sorted([f for f in folder.iterdir() if f.is_file()],
+                        key=lambda f: f.stat().st_mtime, reverse=True)
 
     # 1. 안내문 (최신 1개)
-    ann = sorted(folder.glob("종소세안내문_*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
+    ann = [f for f in root_files if "종소세안내문" in nfc(f.name) and f.suffix == ".pdf"]
     if ann:
         files_to_send.append(ann[0])
 
     # 2. 전년도 자료
-    for pat in ["전년도종소세신고내역.*", "전년도*.xls*"]:
-        files_to_send.extend(folder.glob(pat))
+    prev = [f for f in root_files if "전년도종소세신고내역" in nfc(f.name)]
+    files_to_send.extend(prev)
 
     # 3. 작업판 엑셀 (최신 1개)
-    wp = sorted(folder.glob("작업판_*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
+    wp = [f for f in root_files if nfc(f.name).startswith("작업판_") and f.suffix == ".xlsx"]
     if wp:
         files_to_send.append(wp[0])
 
-    # 4. 지급명세서 폴더
+    # 4. 지급명세서 + 간이용역소득 폴더
     for sub in ["지급명세서", "간이용역소득"]:
-        d = folder / sub
-        if d.is_dir():
+        d = next((p for p in folder.iterdir() if p.is_dir() and nfc(p.name) == sub), None)
+        if d:
             files_to_send.extend(sorted(d.iterdir()))
 
     files_to_send = [f for f in files_to_send if f.is_file()]
