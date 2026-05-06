@@ -2,17 +2,24 @@
 jongsotaxbot.py - 종소세 작업 전용 텔레그램 봇 (@jongsotax_bot)
 
 명령어:
-  /작업 장성환      NAS에서 파일 꺼내서 전송 (안내문+전년도+부가세+작업시트)
-  /수임동의 장성환  진행 상태 조회
-  /발송 장성환      접수증+납부서 링크 발송 (게이트 포함)
-  장성환.pdf 업로드 → NAS 신고서.pdf 저장 (기존 있으면 _archive 이동)
+  /work 강동수       NAS에서 파일 꺼내서 전송 (안내문+전년도+부가세+작업시트)
+  /agree 강동수      진행 상태 조회
+  /send 강동수       접수증+납부서 링크 발송 (게이트 포함)
+  /pkg 강동수        출력패키지 PDF 재생성 (이름.xls + 검증보고서 필요)
+  25강동수신고서.pdf 업로드 → NAS 신고서.pdf 저장 + 교차검증 + 출력패키지 자동 생성
+
+자동 흐름 (신고서 업로드 시):
+  [이름.xls 있음] → 검증보고서(HTML) + 출력패키지 PDF (검증+소득+작업준비+안내문1p) 발송
+  [이름.xls 없음] → 검증보고서(HTML)만 발송 + "이름.xls를 NAS 폴더에 넣어주세요" 안내
 
 실행: python3 ~/종소세2026/jongsotaxbot.py
 """
 
+import asyncio
 import os
-import glob
 import logging
+import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from telegram import Update
@@ -27,6 +34,9 @@ NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")   # Mac Mini 
 NAS_URL        = "https://nas.taxenglab.com/종소세2026/고객"    # Cloudflare URL
 
 ALLOWED_USERS: list[int] = []  # 빈 리스트 = 전체 허용
+
+# 작업결과 엑셀 내 소득시트 목록 (이름.xls 에서 찾을 시트)
+WORKPAN_SHEETS = {"프리", "사업자복식", "프리복식", "사업자+프리", "사업자+사업자", "프리+프리"}
 
 LOG_FILE = os.path.expanduser("~/종소세2026/jongsotaxbot.log")
 
@@ -103,6 +113,8 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await do_save_singoser(update, context, folder, extra)
         elif action == "수임동의":
             await do_status(update, folder)
+        elif action == "출력패키지":
+            await do_pkg(update, context, folder)
     except ValueError:
         pass
     return True
@@ -110,21 +122,234 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def parse_name_arg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     """명령어에서 이름 추출. /work강동수 또는 /work 강동수 둘 다 처리"""
-    # context.args 있으면 우선
     if context.args:
         return " ".join(context.args).strip()
-    # 없으면 raw text에서 명령어 부분 제거
     text = update.message.text or ""
-    # /work강동수 → 강동수
     parts = text.split(None, 1)
     if len(parts) >= 2:
         return parts[1].strip()
-    # /work강동수 (공백 없음) → 명령어에서 / 뒤 prefix 제거
     cmd = parts[0].lstrip("/")
-    for prefix in ("work", "작업", "agree", "수임동의", "send", "발송"):
+    for prefix in ("work", "작업", "agree", "수임동의", "send", "발송", "pkg", "출력패키지"):
         if cmd.startswith(prefix):
             return cmd[len(prefix):].strip()
     return ""
+
+
+# ===== 출력패키지 생성 — 동기 함수들 (run_in_executor 용) =====
+
+def _html_to_pdf_sync(html_path: Path, pdf_path: Path) -> bool:
+    """playwright Chromium으로 HTML → A4 PDF 변환"""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(html_path.as_uri(), wait_until="networkidle")
+            page.pdf(
+                path=str(pdf_path),
+                format="A4",
+                print_background=True,
+                margin={"top": "10mm", "bottom": "10mm",
+                        "left": "10mm", "right": "10mm"},
+            )
+            browser.close()
+        return True
+    except Exception as e:
+        logger.warning("[패키지] HTML→PDF 실패: %s", e)
+        return False
+
+
+def _sheet_to_pdf_sync(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
+    """xlwings로 특정 시트 → PDF 변환 (Excel 필요)"""
+    app = None
+    wb  = None
+    try:
+        import xlwings as xw
+        app = xw.App(visible=False)
+        app.display_alerts = False
+        wb = app.books.open(str(xls_path))
+        sheet = wb.sheets[sheet_name]
+        sheet.api.ExportAsFixedFormat(
+            Type=0,                     # xlTypePDF
+            Filename=str(pdf_path),
+            Quality=0,                  # xlQualityStandard
+            IncludeDocProperties=True,
+            IgnorePrintAreas=False,
+            OpenAfterPublish=False,
+        )
+        return True
+    except ImportError:
+        logger.warning("[패키지] xlwings 없음 — Excel 시트 PDF 스킵 (Excel 설치 필요)")
+        return False
+    except Exception as e:
+        logger.warning("[패키지] 시트 '%s' PDF 실패: %s", sheet_name, e)
+        return False
+    finally:
+        if wb:
+            try: wb.close()
+            except Exception: pass
+        if app:
+            try: app.quit()
+            except Exception: pass
+
+
+def _extract_first_page_sync(pdf_in: Path, pdf_out: Path) -> bool:
+    """PDF 첫 페이지만 추출"""
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(str(pdf_in))
+        writer = PyPDF2.PdfWriter()
+        writer.add_page(reader.pages[0])
+        with open(pdf_out, "wb") as f:
+            writer.write(f)
+        return True
+    except Exception as e:
+        logger.warning("[패키지] PDF 첫 페이지 추출 실패: %s", e)
+        return False
+
+
+def _merge_pdfs_sync(pdf_list: list, out_path: Path) -> bool:
+    """여러 PDF → 하나로 합치기"""
+    try:
+        import PyPDF2
+        merger = PyPDF2.PdfMerger()
+        for p in pdf_list:
+            merger.append(str(p))
+        with open(out_path, "wb") as f:
+            merger.write(f)
+        merger.close()
+        return True
+    except Exception as e:
+        logger.warning("[패키지] PDF 합치기 실패: %s", e)
+        return False
+
+
+def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path: Path) -> Path | None:
+    """
+    출력패키지 PDF 생성 (동기 — run_in_executor 로 호출):
+      1. 검증보고서 (HTML → PDF)
+      2. 소득시트   (이름.xls WORKPAN_SHEETS 시트 → PDF)
+      3. 작업준비시트 (이름.xls 작업준비_* 시트 → PDF)
+      4. 안내문 1페이지
+      → 합쳐서 출력패키지_{이름}_{날짜}.pdf 저장 후 경로 반환
+    """
+    ts     = datetime.now().strftime("%Y%m%d_%H%M")
+    tmpdir = Path(tempfile.mkdtemp(prefix="print_pkg_"))
+    pdf_parts: list[Path] = []
+
+    try:
+        # ─ 1. 검증보고서 HTML → PDF ─────────────────────────────
+        pdf_check = tmpdir / "01_검증보고서.pdf"
+        if _html_to_pdf_sync(html_path, pdf_check):
+            pdf_parts.append(pdf_check)
+            logger.info("[패키지] 검증보고서 PDF 완료")
+        else:
+            logger.warning("[패키지] 검증보고서 PDF 실패 — 스킵")
+
+        # ─ 2. 작업결과 엑셀 시트 → PDF ──────────────────────────
+        try:
+            import xlwings as xw
+            _app = xw.App(visible=False)
+            _app.display_alerts = False
+            _wb  = _app.books.open(str(xls_path))
+            sheet_names = [s.name for s in _wb.sheets]
+            _wb.close()
+            _app.quit()
+            logger.info("[패키지] 시트 목록: %s", sheet_names)
+
+            # 소득시트 (프리/복식 작업판)
+            workpan = next((s for s in sheet_names if s in WORKPAN_SHEETS), None)
+            if workpan:
+                pdf_wp = tmpdir / "02_소득시트.pdf"
+                if _sheet_to_pdf_sync(xls_path, workpan, pdf_wp):
+                    pdf_parts.append(pdf_wp)
+                    logger.info("[패키지] 소득시트 '%s' PDF 완료", workpan)
+            else:
+                logger.warning("[패키지] 소득시트 없음 (시트 목록: %s)", sheet_names)
+
+            # 작업준비 시트
+            junbi = next((s for s in sheet_names if s.startswith("작업준비_")), None)
+            if junbi:
+                pdf_jj = tmpdir / "03_작업준비.pdf"
+                if _sheet_to_pdf_sync(xls_path, junbi, pdf_jj):
+                    pdf_parts.append(pdf_jj)
+                    logger.info("[패키지] 작업준비 '%s' PDF 완료", junbi)
+
+        except ImportError:
+            logger.warning("[패키지] xlwings 없음 — Excel 시트 PDF 스킵")
+        except Exception as e:
+            logger.warning("[패키지] Excel PDF 처리 실패: %s", e)
+
+        # ─ 3. 안내문 첫 페이지 ──────────────────────────────────
+        ann_files = sorted(folder.glob("종소세안내문_*.pdf"),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        if ann_files:
+            pdf_ann = tmpdir / "04_안내문1p.pdf"
+            if _extract_first_page_sync(ann_files[0], pdf_ann):
+                pdf_parts.append(pdf_ann)
+                logger.info("[패키지] 안내문 1페이지 완료")
+
+        # ─ 4. 합치기 ────────────────────────────────────────────
+        if not pdf_parts:
+            logger.warning("[패키지] 합칠 PDF 없음")
+            return None
+
+        # 기존 출력패키지 archive
+        old_pkgs = list(folder.glob("출력패키지_*.pdf"))
+        if old_pkgs:
+            arch = folder / "_archive"
+            arch.mkdir(exist_ok=True)
+            for op in old_pkgs:
+                try:
+                    op.rename(arch / op.name)
+                except Exception:
+                    pass
+
+        out_path = folder / f"출력패키지_{name}_{ts}.pdf"
+        if _merge_pdfs_sync(pdf_parts, out_path):
+            logger.info("[패키지] 저장 완료: %s (%d개 파트)", out_path.name, len(pdf_parts))
+            return out_path
+        return None
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ===== 발송 헬퍼 (HTML 검증보고서 / 출력패키지 PDF) =====
+
+async def _send_html_report(context: ContextTypes.DEFAULT_TYPE, update: Update,
+                             html_path: Path, folder: Path, sender_id: int):
+    """검증보고서 HTML을 발신자 + 관리자에게 전송"""
+    caption = f"📊 {folder.name} 검증보고서"
+    with open(html_path, "rb") as fp:
+        await context.bot.send_document(chat_id=sender_id, document=fp,
+                                        filename=html_path.name, caption=caption)
+    if sender_id != ADMIN_CHAT_ID:
+        with open(html_path, "rb") as fp:
+            await context.bot.send_document(
+                chat_id=ADMIN_CHAT_ID, document=fp, filename=html_path.name,
+                caption=f"{caption} (직원: {update.effective_user.full_name})"
+            )
+
+
+async def _send_package(context: ContextTypes.DEFAULT_TYPE, update: Update,
+                        pkg_path: Path, folder: Path, sender_id: int):
+    """출력패키지 PDF를 발신자 + 관리자에게 전송"""
+    try:
+        import PyPDF2
+        pages = len(PyPDF2.PdfReader(str(pkg_path)).pages)
+    except Exception:
+        pages = "?"
+    caption = f"📋 {folder.name} 출력패키지 ({pages}p)"
+    with open(pkg_path, "rb") as fp:
+        await context.bot.send_document(chat_id=sender_id, document=fp,
+                                        filename=pkg_path.name, caption=caption)
+    if sender_id != ADMIN_CHAT_ID:
+        with open(pkg_path, "rb") as fp:
+            await context.bot.send_document(
+                chat_id=ADMIN_CHAT_ID, document=fp, filename=pkg_path.name,
+                caption=f"{caption} (직원: {update.effective_user.full_name})"
+            )
 
 
 # ===== /작업 =====
@@ -212,11 +437,18 @@ async def do_status(update: Update, folder: Path):
     def chk(pattern):
         return bool(list(folder.glob(pattern)))
 
+    parts = folder.name.rsplit("_", 1)
+    _name = parts[0]
+    xls_path = folder / f"{_name}.xls"
+
     items = {
-        "안내문 파싱": chk("종소세안내문_*.pdf"),
-        "신고서":      (folder / "신고서.pdf").exists(),
-        "접수증":      (folder / "접수증.pdf").exists(),
-        "납부서":      (folder / "납부서.pdf").exists(),
+        "안내문 파싱":    chk("종소세안내문_*.pdf"),
+        "신고서":         (folder / "신고서.pdf").exists(),
+        "검증보고서":     chk("검증보고서_*.html"),
+        f"{_name}.xls":  xls_path.exists(),
+        "출력패키지":     chk("출력패키지_*.pdf"),
+        "접수증":         (folder / "접수증.pdf").exists(),
+        "납부서":         (folder / "납부서.pdf").exists(),
     }
     lines = "\n".join(f"{'✅' if v else '❌'} {k}" for k, v in items.items())
     await update.message.reply_text(f"📋 {folder.name}\n{lines}")
@@ -275,7 +507,63 @@ async def do_send(update: Update, folder: Path):
     )
 
 
-# ===== 파일 수신: 이름.pdf → 신고서 저장 + 검증 =====
+# ===== /pkg (출력패키지 재생성) =====
+async def cmd_pkg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    name = parse_name_arg(update, context)
+    if not name:
+        await update.message.reply_text("사용법: /pkg 강동수"); return
+    if not nas_ok():
+        await nas_fail(update); return
+
+    folders = find_folders(name)
+    if not folders:
+        await update.message.reply_text(f"'{name}' 폴더 없음"); return
+    if len(folders) > 1:
+        await ask_choice(update, update.effective_user.id, folders, "출력패키지"); return
+    await do_pkg(update, context, folders[0])
+
+
+async def do_pkg(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Path):
+    """출력패키지 PDF 재생성 — /pkg 명령어 또는 내부 호출"""
+    parts = folder.name.rsplit("_", 1)
+    _name = parts[0]
+    xls_path = folder / f"{_name}.xls"
+
+    if not xls_path.exists():
+        await update.message.reply_text(
+            f"❌ *{_name}.xls* 없음\n"
+            f"NAS `{folder.name}/` 폴더에 작업결과 엑셀을 먼저 넣어주세요.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # 검증보고서 HTML 찾기
+    html_files = sorted(folder.glob("검증보고서_*.html"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+    if not html_files:
+        await update.message.reply_text(
+            f"❌ 검증보고서 없음\n"
+            f"신고서.pdf를 먼저 업로드해 검증을 실행해주세요."
+        )
+        return
+
+    html_path = html_files[0]
+    sender_id = update.effective_chat.id
+    await update.message.reply_text(f"📦 {_name} 출력패키지 생성 중 (잠시 대기)...")
+
+    loop = asyncio.get_running_loop()
+    pkg_path = await loop.run_in_executor(
+        None, _make_print_package_sync, folder, _name, html_path, xls_path
+    )
+
+    if pkg_path and pkg_path.exists():
+        await _send_package(context, update, pkg_path, folder, sender_id)
+    else:
+        await update.message.reply_text("⚠️ 출력패키지 생성 실패 — 로그 확인 필요")
+
+
+# ===== 파일 수신: 이름25신고서.pdf → 신고서 저장 + 검증 + 출력패키지 =====
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
 
@@ -321,7 +609,10 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Path, tg_file):
-    """신고서.pdf 저장 → 교차검증 → 발신자+관리자 보고서 발송 [ULTRA CRITICAL]"""
+    """
+    신고서.pdf 저장 → 교차검증 → 출력패키지 생성(이름.xls 있을 때) → 발신자+관리자 발송
+    [ULTRA CRITICAL] 기존 신고서는 반드시 _archive 이동 후 새 파일 저장
+    """
     target  = folder / "신고서.pdf"
     archive = folder / "_archive"
 
@@ -336,7 +627,8 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
     logger.info("신고서 저장: %s", target)
     await update.message.reply_text(f"✅ {folder.name}/신고서.pdf 저장\n⏳ 교차검증 실행 중...")
 
-    # 교차검증 실행
+    # ── 교차검증 실행 ──────────────────────────────────────────────
+    html_path = None
     try:
         import sys as _sys
         _bot_dir = str(Path(__file__).resolve().parent)
@@ -350,29 +642,46 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
 
         html_path = verify_run(_name, _jumin, folder=folder)
 
-        if html_path and html_path.exists():
-            sender_id = update.effective_chat.id
-            caption   = f"📊 {folder.name} 검증보고서"
-
-            # 발신자에게 전송
-            with open(html_path, "rb") as fp:
-                await context.bot.send_document(chat_id=sender_id, document=fp,
-                                                filename=html_path.name, caption=caption)
-
-            # 관리자에게도 전송 (발신자 ≠ 관리자인 경우만)
-            if sender_id != ADMIN_CHAT_ID:
-                with open(html_path, "rb") as fp:
-                    await context.bot.send_document(
-                        chat_id=ADMIN_CHAT_ID, document=fp,
-                        filename=html_path.name,
-                        caption=f"{caption} (직원 업로드: {update.effective_user.full_name})"
-                    )
-        else:
-            await update.message.reply_text("⚠️ 검증보고서 생성 실패 — 수동 실행 필요")
-
     except Exception as e:
         logger.error("검증 오류: %s", e, exc_info=True)
         await update.message.reply_text(f"⚠️ 검증 오류: {e}\n(신고서는 저장됐습니다)")
+        return
+
+    if not html_path or not html_path.exists():
+        await update.message.reply_text("⚠️ 검증보고서 생성 실패 — 수동 실행 필요")
+        return
+
+    # ── 이름.xls 확인 → 출력패키지 또는 검증보고서만 ──────────────
+    parts    = folder.name.rsplit("_", 1)
+    _name    = parts[0]
+    xls_path = folder / f"{_name}.xls"
+    sender_id = update.effective_chat.id
+
+    # 검증보고서(HTML)는 항상 전송 (인터랙티브 확인용)
+    await _send_html_report(context, update, html_path, folder, sender_id)
+
+    if not xls_path.exists():
+        # 작업결과 엑셀 없음 → 안내 메시지
+        await update.message.reply_text(
+            f"📝 출력패키지를 만들려면 *{_name}.xls* (작업결과 엑셀)를\n"
+            f"NAS `{folder.name}/` 폴더에 넣어주세요.\n"
+            f"넣은 후 /pkg {_name} 명령어로 생성하세요.",
+            parse_mode="Markdown"
+        )
+    else:
+        # 이름.xls 있음 → 출력패키지 자동 생성
+        await update.message.reply_text(f"📦 {_name}.xls 발견! 출력패키지 생성 중 (잠시 대기)...")
+        loop = asyncio.get_running_loop()
+        pkg_path = await loop.run_in_executor(
+            None, _make_print_package_sync, folder, _name, html_path, xls_path
+        )
+        if pkg_path and pkg_path.exists():
+            await _send_package(context, update, pkg_path, folder, sender_id)
+        else:
+            await update.message.reply_text(
+                "⚠️ 출력패키지 생성 실패 — 검증보고서만 전송됐습니다\n"
+                "Excel 설치 여부 및 시트명 확인 후 /pkg 명령어로 재시도하세요."
+            )
 
 
 # ===== 텍스트: 동명이인 번호 선택 =====
@@ -390,6 +699,7 @@ def main():
     app.add_handler(CommandHandler("work",    cmd_work))    # /work 강동수
     app.add_handler(CommandHandler("agree",   cmd_status))  # /agree 강동수
     app.add_handler(CommandHandler("send",    cmd_send))    # /send 강동수
+    app.add_handler(CommandHandler("pkg",     cmd_pkg))     # /pkg 강동수 (출력패키지 재생성)
     app.add_handler(MessageHandler(filters.Document.ALL,            handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
