@@ -21,11 +21,12 @@ from telegram.ext import (
 )
 
 # ===== 설정 =====
-TOKEN    = "REDACTED_TOKEN_1"
-NAS_BASE = Path("/Users/changmini/NAS/종소세2026/고객")   # Mac Mini NAS 마운트 경로
-NAS_URL  = "https://nas.taxenglab.com/종소세2026/고객"    # Cloudflare URL
+TOKEN          = "REDACTED_TOKEN_1"
+ADMIN_CHAT_ID  = 5980411081    # 세무사 (관리자)
+NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")   # Mac Mini NAS 마운트 경로
+NAS_URL        = "https://nas.taxenglab.com/종소세2026/고객"    # Cloudflare URL
 
-ALLOWED_USERS: list[int] = []  # TODO: 직원 텔레그램 user_id 추가 (빈 리스트 = 전체 허용)
+ALLOWED_USERS: list[int] = []  # 빈 리스트 = 전체 허용
 
 LOG_FILE = os.path.expanduser("~/종소세2026/jongsotaxbot.log")
 
@@ -99,7 +100,7 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif action == "발송":
             await do_send(update, folder)
         elif action == "신고서":
-            await do_save_singoser(update, folder, extra)
+            await do_save_singoser(update, context, folder, extra)
         elif action == "수임동의":
             await do_status(update, folder)
     except ValueError:
@@ -145,15 +146,35 @@ async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def do_work(update: Update, folder: Path):
-    files = [
-        f for f in sorted(folder.iterdir())
-        if f.is_file() and f.suffix in (".pdf", ".xlsx", ".xls")
-    ]
-    if not files:
-        await update.message.reply_text(f"{folder.name}: 작업 파일이 없습니다. 홈택스 안내문이 파싱됐는지 확인하세요."); return
+    """안내문 + 전년도자료 + 작업판 + 지급명세서 + 간이용역소득 전송"""
+    files_to_send = []
 
-    await update.message.reply_text(f"📁 {folder.name} — {len(files)}개 전송 중...")
-    for f in files:
+    # 1. 안내문 (최신 1개)
+    ann = sorted(folder.glob("종소세안내문_*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if ann:
+        files_to_send.append(ann[0])
+
+    # 2. 전년도 자료
+    for pat in ["전년도종소세신고내역.*", "전년도*.xls*"]:
+        files_to_send.extend(folder.glob(pat))
+
+    # 3. 작업판 엑셀 (최신 1개)
+    wp = sorted(folder.glob("작업판_*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if wp:
+        files_to_send.append(wp[0])
+
+    # 4. 지급명세서 폴더
+    for sub in ["지급명세서", "간이용역소득"]:
+        d = folder / sub
+        if d.is_dir():
+            files_to_send.extend(sorted(d.iterdir()))
+
+    files_to_send = [f for f in files_to_send if f.is_file()]
+    if not files_to_send:
+        await update.message.reply_text(f"{folder.name}: 작업 파일 없음 (홈택스 안내문 파싱 완료됐나요?)"); return
+
+    await update.message.reply_text(f"📁 {folder.name} — {len(files_to_send)}개 전송 중...")
+    for f in files_to_send:
         try:
             with open(f, "rb") as fp:
                 await update.message.reply_document(document=fp, filename=f.name)
@@ -247,7 +268,7 @@ async def do_send(update: Update, folder: Path):
     )
 
 
-# ===== 파일 수신: 장성환.pdf → 신고서 저장 =====
+# ===== 파일 수신: 이름.pdf → 신고서 저장 + 검증 =====
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
 
@@ -274,14 +295,15 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_choice(update, update.effective_user.id, folders, "신고서", tg_file)
         return
 
-    await do_save_singoser(update, folders[0], tg_file)
+    await do_save_singoser(update, context, folders[0], tg_file)
 
 
-async def do_save_singoser(update: Update, folder: Path, tg_file):
-    """신고서.pdf 저장 — 기존 있으면 _archive 이동 후 저장 [ULTRA CRITICAL]"""
-    target    = folder / "신고서.pdf"
-    archive   = folder / "_archive"
+async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Path, tg_file):
+    """신고서.pdf 저장 → 교차검증 → 발신자+관리자 보고서 발송 [ULTRA CRITICAL]"""
+    target  = folder / "신고서.pdf"
+    archive = folder / "_archive"
 
+    # 기존 파일 archive 이동
     if target.exists():
         archive.mkdir(exist_ok=True)
         ts = datetime.fromtimestamp(target.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
@@ -290,7 +312,45 @@ async def do_save_singoser(update: Update, folder: Path, tg_file):
 
     await tg_file.download_to_drive(str(target))
     logger.info("신고서 저장: %s", target)
-    await update.message.reply_text(f"✅ {folder.name}/신고서.pdf 저장 완료")
+    await update.message.reply_text(f"✅ {folder.name}/신고서.pdf 저장\n⏳ 교차검증 실행 중...")
+
+    # 교차검증 실행
+    try:
+        import sys as _sys
+        _bot_dir = str(Path(__file__).resolve().parent)
+        if _bot_dir not in _sys.path:
+            _sys.path.insert(0, _bot_dir)
+        from tax_cross_verify import run as verify_run
+
+        parts  = folder.name.rsplit("_", 1)
+        _name  = parts[0]
+        _jumin = parts[1] if len(parts) > 1 else ""
+
+        html_path = verify_run(_name, _jumin, folder=folder)
+
+        if html_path and html_path.exists():
+            sender_id = update.effective_chat.id
+            caption   = f"📊 {folder.name} 검증보고서"
+
+            # 발신자에게 전송
+            with open(html_path, "rb") as fp:
+                await context.bot.send_document(chat_id=sender_id, document=fp,
+                                                filename=html_path.name, caption=caption)
+
+            # 관리자에게도 전송 (발신자 ≠ 관리자인 경우만)
+            if sender_id != ADMIN_CHAT_ID:
+                with open(html_path, "rb") as fp:
+                    await context.bot.send_document(
+                        chat_id=ADMIN_CHAT_ID, document=fp,
+                        filename=html_path.name,
+                        caption=f"{caption} (직원 업로드: {update.effective_user.full_name})"
+                    )
+        else:
+            await update.message.reply_text("⚠️ 검증보고서 생성 실패 — 수동 실행 필요")
+
+    except Exception as e:
+        logger.error("검증 오류: %s", e, exc_info=True)
+        await update.message.reply_text(f"⚠️ 검증 오류: {e}\n(신고서는 저장됐습니다)")
 
 
 # ===== 텍스트: 동명이인 번호 선택 =====

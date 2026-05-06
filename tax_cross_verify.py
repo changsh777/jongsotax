@@ -20,14 +20,27 @@ if hasattr(sys.stdout, 'reconfigure'):
 elif sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-sys.path.insert(0, r"F:\종소세2026")
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
 os.environ.setdefault("SEOTAX_ENV", "nas")
 
 import pdfplumber
 import xlrd
 
-# ── 경로 ───────────────────────────────────────────────────────────
-CUSTOMER_DIR = Path(r"Z:\종소세2026\고객")
+# ── 경로 (플랫폼 자동 선택) ──────────────────────────────────────
+def _default_customer_dir() -> Path:
+    candidates = [
+        Path(r"Z:\종소세2026\고객"),                        # Windows NAS
+        Path("/Users/changmini/NAS/종소세2026/고객"),       # Mac Mini
+        Path("/mnt/nas/종소세2026/고객"),                   # Linux
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return Path(r"Z:\종소세2026\고객")   # fallback
+
+CUSTOMER_DIR = _default_customer_dir()
 
 # ── 파일 역할 키워드 ──────────────────────────────────────────────
 ROLES = {
@@ -853,11 +866,17 @@ def find_folder(name: str, jumin6: str = "") -> Path | None:
     return dirs[0] if dirs else None
 
 
-def run(name: str, jumin6: str = "") -> Path | None:
-    folder = find_folder(name, jumin6)
+def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
+    if folder is None:
+        folder = find_folder(name, jumin6)
     if not folder:
         print(f"  [오류] 폴더 없음: {name}")
         return None
+    # name/jumin6 폴더명에서 자동 추출 (봇 호환)
+    if not name and folder:
+        parts = folder.name.rsplit("_", 1)
+        name   = parts[0]
+        jumin6 = parts[1] if len(parts) > 1 else ""
 
     print(f"\n{'─'*54}")
     print(f"  종합소득세 교차검증 보고서 생성기")
