@@ -270,6 +270,9 @@ def make_jakupan(name, jumin6="", force_jangbu: str = ""):
                   해당 값을 기장의무로 강제 적용합니다.
                   빈 문자열이면 기존 자동 감지 로직을 사용합니다.
     """
+    import unicodedata
+    name = unicodedata.normalize("NFC", str(name))   # Mac NFD → NFC
+    jumin6 = unicodedata.normalize("NFC", str(jumin6))
     folder = find_folder(name, jumin6)
     if folder is None:
         print(f"  [오류] 폴더 없음: {name}")
