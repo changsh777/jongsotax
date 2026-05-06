@@ -106,7 +106,7 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         action = pending["action"]
         extra  = pending["extra"]
         if action == "작업":
-            await do_work(update, folder)
+            await do_work(update, folder, force_jangbu=extra or "")
         elif action == "발송":
             await do_send(update, folder)
         elif action == "신고서":
@@ -120,18 +120,40 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return True
 
 
+JANGBU_KEYWORDS = ("간편장부", "복식부기")
+
+
 def parse_name_arg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """명령어에서 이름 추출. /work강동수 또는 /work 강동수 둘 다 처리"""
+    """명령어에서 이름 추출. /work강동수 또는 /work 강동수 둘 다 처리.
+    장부유형 키워드(간편장부/복식부기)가 포함돼 있으면 제거 후 이름만 반환.
+    """
     if context.args:
-        return " ".join(context.args).strip()
+        tokens = [t for t in context.args if t not in JANGBU_KEYWORDS]
+        return " ".join(tokens).strip()
     text = update.message.text or ""
     parts = text.split(None, 1)
     if len(parts) >= 2:
-        return parts[1].strip()
+        remainder = parts[1].strip()
+        tokens = [t for t in remainder.split() if t not in JANGBU_KEYWORDS]
+        return " ".join(tokens).strip()
     cmd = parts[0].lstrip("/")
     for prefix in ("work", "작업", "agree", "수임동의", "send", "발송", "pkg", "출력패키지"):
         if cmd.startswith(prefix):
             return cmd[len(prefix):].strip()
+    return ""
+
+
+def parse_jangbu_arg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """명령어에서 장부유형 추출. '간편장부' 또는 '복식부기' 중 하나 반환. 없으면 빈 문자열."""
+    if context.args:
+        for token in context.args:
+            if token in JANGBU_KEYWORDS:
+                return token
+        return ""
+    text = update.message.text or ""
+    for kw in JANGBU_KEYWORDS:
+        if kw in text:
+            return kw
     return ""
 
 
@@ -355,9 +377,14 @@ async def _send_package(context: ContextTypes.DEFAULT_TYPE, update: Update,
 # ===== /작업 =====
 async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
-    name = parse_name_arg(update, context)
+    name     = parse_name_arg(update, context)
+    jangbu   = parse_jangbu_arg(update, context)
     if not name:
-        await update.message.reply_text("사용법: /work 강동수  또는  /작업 강동수"); return
+        await update.message.reply_text(
+            "사용법: /work 강동수  또는  /작업 강동수\n"
+            "장부유형 지정: /work 강동수 복식부기  또는  /work 강동수 간편장부"
+        )
+        return
     if not nas_ok():
         await nas_fail(update); return
 
@@ -366,14 +393,54 @@ async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not folders:
         await update.message.reply_text(f"'{name}' 고객 자료가 없습니다. 홈택스 안내문 파싱이 완료됐나요?"); return
     if len(folders) > 1:
-        await ask_choice(update, update.effective_user.id, folders, "작업"); return
-    await do_work(update, folders[0])
+        # 동명이인 선택 대기 — jangbu 는 extra 로 전달
+        user_pending[update.effective_user.id] = {
+            "folders": folders, "action": "작업", "extra": jangbu
+        }
+        lines = "\n".join(f"{i+1}. {f.name}" for i, f in enumerate(folders))
+        await update.message.reply_text(f"동명이인 확인:\n{lines}\n\n번호를 입력하세요.")
+        return
+
+    await do_work(update, folders[0], force_jangbu=jangbu)
 
 
-async def do_work(update: Update, folder: Path):
-    """안내문 + 전년도자료 + 작업판 + 지급명세서 + 간이용역소득 전송"""
+async def do_work(update: Update, folder: Path, force_jangbu: str = ""):
+    """안내문 + 전년도자료 + 작업판 + 지급명세서 + 간이용역소득 전송.
+
+    force_jangbu: '간편장부' 또는 '복식부기' 지정 시 작업판을 해당 유형으로 즉석 재생성 후 전송.
+    """
     import unicodedata
     def nfc(s): return unicodedata.normalize("NFC", str(s))
+
+    # ── 장부유형 강제 지정 시 작업판 즉석 재생성 ──────────────────
+    if force_jangbu in ("간편장부", "복식부기"):
+        await update.message.reply_text(
+            f"[{force_jangbu}] 작업판 재생성 중..."
+        )
+        try:
+            import sys as _sys
+            _proj = str(Path(__file__).resolve().parent)
+            if _proj not in _sys.path:
+                _sys.path.insert(0, _proj)
+            from jakupan_gen import make_jakupan
+
+            parts  = folder.name.rsplit("_", 1)
+            _name  = parts[0]
+            jumin6 = parts[1][:6] if len(parts) > 1 else ""
+            out = make_jakupan(_name, jumin6, force_jangbu=force_jangbu)
+            if out:
+                await update.message.reply_text(
+                    f"작업판 생성 완료: {out.name}"
+                )
+            else:
+                await update.message.reply_text(
+                    f"작업판 생성 실패 — 기존 파일이 있으면 그대로 전송합니다."
+                )
+        except Exception as e:
+            logger.error("[do_work] 작업판 재생성 오류: %s", e, exc_info=True)
+            await update.message.reply_text(
+                f"작업판 재생성 오류: {e}\n기존 파일이 있으면 그대로 전송합니다."
+            )
 
     files_to_send = []
     root_files = sorted([f for f in folder.iterdir() if f.is_file()],

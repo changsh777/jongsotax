@@ -261,7 +261,13 @@ def add_jakupjunbi_sheet(wb, name, jumin6, folder):
 
 
 # ── 메인 처리 ────────────────────────────────────────────────────
-def make_jakupan(name, jumin6=""):
+def make_jakupan(name, jumin6="", force_jangbu: str = ""):
+    """작업판 엑셀 생성.
+
+    force_jangbu: "간편장부" 또는 "복식부기" 를 전달하면 안내문 기장의무 대신
+                  해당 값을 기장의무로 강제 적용합니다.
+                  빈 문자열이면 기존 자동 감지 로직을 사용합니다.
+    """
     folder = find_folder(name, jumin6)
     if folder is None:
         print(f"  [오류] 폴더 없음: {name}")
@@ -282,8 +288,14 @@ def make_jakupan(name, jumin6=""):
     # 지급명세서/간이용역소득 폴더 파일명에서 소득종류 감지
     file_income_types = detect_income_from_files(folder)
 
+    # 장부유형: force_jangbu 지정 시 강제, 아니면 안내문 자동 감지
+    if force_jangbu in ("간편장부", "복식부기"):
+        기장의무 = force_jangbu
+        print(f"  [장부유형] 강제 지정: {force_jangbu}")
+    else:
+        기장의무 = str(ann_raw.get("기장의무", "")).strip()
+
     # 템플릿·시트 자동 선택
-    기장의무 = str(ann_raw.get("기장의무", "")).strip()
     template_path, sheet_name = select_template_and_sheet(biz_rows, 기장의무)
     print(f"  [템플릿] {template_path.name}  /  시트: {sheet_name}")
 
@@ -354,9 +366,10 @@ def main():
                 print(f"  {i}/{total} 완료")
         print(f"\n[완료] {ok}/{total}명 생성")
     else:
-        name   = args[0] if len(args) > 0 else "황순영"
-        jumin6 = args[1] if len(args) > 1 else "800315"
-        out = make_jakupan(name, jumin6)
+        name         = args[0] if len(args) > 0 else "황순영"
+        jumin6       = args[1] if len(args) > 1 else "800315"
+        force_jangbu = args[2] if len(args) > 2 else ""
+        out = make_jakupan(name, jumin6, force_jangbu)
         if out:
             print(f"저장: {out}")
 
