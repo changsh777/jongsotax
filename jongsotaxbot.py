@@ -394,6 +394,16 @@ async def do_work(update: Update, folder: Path):
                 and f.name != "신고서.pdf"]
     files_to_send.extend(prev_pdf)
 
+    # ⚠️ 전년도 신고서 없음 알림 (신규 고객 — 수동 업로드 필요)
+    if not prev_pdf:
+        parts = folder.name.rsplit("_", 1)
+        _name = parts[0]
+        await update.message.reply_text(
+            f"⚠️ *{_name}* 전년도 신고서 없음\n"
+            f"신규 고객이면 전년도 신고서 PDF를 NAS `{folder.name}/` 폴더에 넣어주세요.",
+            parse_mode="Markdown"
+        )
+
     # 3. 작업판 엑셀 (최신 1개)
     wp = [f for f in root_files if nfc(f.name).startswith("작업판_") and f.suffix == ".xlsx"]
     if wp:
