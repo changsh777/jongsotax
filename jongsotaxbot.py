@@ -6,6 +6,7 @@ jongsotaxbot.py - 종소세 작업 전용 텔레그램 봇 (@jongsotax_bot)
   /agree 강동수      진행 상태 조회
   /send 강동수       접수증+납부서 링크 발송 (게이트 포함)
   /pkg 강동수        출력패키지 PDF 재생성 (이름.xls + 검증보고서 필요)
+  /전신고서          2024년 귀속 신고서 없는 고객 목록 조회
   25강동수신고서.pdf 업로드 → NAS 신고서.pdf 저장 + 교차검증 + 출력패키지 자동 생성
 
 자동 흐름 (신고서 업로드 시):
@@ -769,6 +770,81 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
             )
 
 
+# ===== /전신고서 (2024년 귀속 신고서 없는 고객 목록) =====
+async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """CUSTOMER_DIR 전체 폴더 스캔 → 2024년 귀속 신고서 PDF 없는 고객 목록 전송"""
+    if not is_allowed(update): return
+    if not nas_ok():
+        await nas_fail(update); return
+
+    import unicodedata
+
+    await update.message.reply_text("⏳ 2024년 신고서 현황 조회 중...")
+
+    missing: list[tuple[str, str]] = []  # (이름, 주민앞6)
+
+    try:
+        folders = sorted(
+            p for p in NAS_BASE.iterdir() if p.is_dir()
+        )
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ 폴더 스캔 실패: {e}")
+        return
+
+    for folder in folders:
+        folder_nfc = unicodedata.normalize("NFC", folder.name)
+        # 폴더명 형식: 이름_주민앞6
+        parts = folder_nfc.rsplit("_", 1)
+        name  = parts[0]
+        jumin6 = parts[1][:6] if len(parts) > 1 else ""
+
+        # 해당 폴더 내 파일 중 신고서 PDF 찾기
+        has_singoser = False
+        try:
+            for f in folder.iterdir():
+                if not f.is_file():
+                    continue
+                fname_nfc = unicodedata.normalize("NFC", f.name)
+                if (
+                    "신고서" in fname_nfc
+                    and fname_nfc.lower().endswith(".pdf")
+                    and ("202401" in fname_nfc or "2024" in fname_nfc)
+                ):
+                    has_singoser = True
+                    break
+        except Exception:
+            pass  # 접근 불가 폴더 스킵
+
+        if not has_singoser:
+            missing.append((name, jumin6))
+
+    total = len(missing)
+    if total == 0:
+        await update.message.reply_text("✅ 2024년 신고서 없는 고객 없음 (모두 완료)")
+        return
+
+    header = f"📋 2024년 신고서 없는 고객 ({total}명)\n\n"
+    lines  = [f"{i+1}. {name} ({jumin6})" for i, (name, jumin6) in enumerate(missing)]
+    body   = "\n".join(lines)
+    full   = header + body
+
+    # 4096자 초과 시 분할 전송
+    MAX = 4096
+    if len(full) <= MAX:
+        await update.message.reply_text(full)
+    else:
+        chunk = header
+        for line in lines:
+            candidate = chunk + line + "\n"
+            if len(candidate) > MAX:
+                await update.message.reply_text(chunk.rstrip())
+                chunk = line + "\n"
+            else:
+                chunk = candidate
+        if chunk.strip():
+            await update.message.reply_text(chunk.rstrip())
+
+
 # ===== 텍스트: 동명이인 번호 선택 =====
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
@@ -781,10 +857,11 @@ def main():
         logger.warning("NAS 미연결: %s", NAS_BASE)
 
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("work",    cmd_work))    # /work 강동수
-    app.add_handler(CommandHandler("agree",   cmd_status))  # /agree 강동수
-    app.add_handler(CommandHandler("send",    cmd_send))    # /send 강동수
-    app.add_handler(CommandHandler("pkg",     cmd_pkg))     # /pkg 강동수 (출력패키지 재생성)
+    app.add_handler(CommandHandler("work",    cmd_work))          # /work 강동수
+    app.add_handler(CommandHandler("agree",   cmd_status))        # /agree 강동수
+    app.add_handler(CommandHandler("send",    cmd_send))          # /send 강동수
+    app.add_handler(CommandHandler("pkg",     cmd_pkg))           # /pkg 강동수 (출력패키지 재생성)
+    app.add_handler(CommandHandler("전신고서", cmd_전신고서))      # /전신고서 (2024년 신고서 현황)
     app.add_handler(MessageHandler(filters.Document.ALL,            handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
