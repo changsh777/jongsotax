@@ -636,7 +636,7 @@ td.pct { text-align: right; font-size: 12px; color: #1F4E79; font-weight: bold; 
 .badge-기타 { background: #eceff1; color: #546e7a; }
 .footer { text-align: center; color: #999; font-size: 11px; margin-top: 16px; }
 @media print {
-  body { background: #fff; }
+  body { background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .wrap { max-width: 100%; padding: 8px; }
   .section { page-break-inside: avoid; }
 }
