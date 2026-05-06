@@ -128,7 +128,11 @@ def find_folder(name, jumin6):
 
 
 def find_anneam(folder):
-    ps = list(folder.glob("종소세안내문_*.pdf"))
+    import unicodedata
+    ps = [p for p in folder.iterdir()
+          if p.is_file()
+          and unicodedata.normalize("NFC", p.name).startswith("종소세안내문_")
+          and unicodedata.normalize("NFC", p.name).endswith(".pdf")]
     return max(ps, key=lambda p: p.stat().st_mtime) if ps else None
 
 
