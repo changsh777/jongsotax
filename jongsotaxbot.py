@@ -413,40 +413,29 @@ async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def do_work(update: Update, folder: Path, force_jangbu: str = ""):
     """안내문 + 전년도자료 + 작업판 + 지급명세서 + 간이용역소득 전송.
 
-    force_jangbu: '간편장부' 또는 '복식부기' 지정 시 작업판을 해당 유형으로 즉석 재생성 후 전송.
+    force_jangbu: '간편장부' 또는 '복식부기' 강제 지정 가능. 없으면 안내문 자동 감지.
+    항상 작업판을 재생성 후 전송.
     """
     import unicodedata
     def nfc(s): return unicodedata.normalize("NFC", str(s))
 
-    # ── 장부유형 강제 지정 시 작업판 즉석 재생성 ──────────────────
-    if force_jangbu in ("간편장부", "복식부기"):
-        await update.message.reply_text(
-            f"[{force_jangbu}] 작업판 재생성 중..."
-        )
-        try:
-            import sys as _sys
-            _proj = str(Path(__file__).resolve().parent)
-            if _proj not in _sys.path:
-                _sys.path.insert(0, _proj)
-            from jakupan_gen import make_jakupan
+    # ── 작업판 항상 재생성 ─────────────────────────────────────────
+    try:
+        import sys as _sys
+        _proj = str(Path(__file__).resolve().parent)
+        if _proj not in _sys.path:
+            _sys.path.insert(0, _proj)
+        from jakupan_gen import make_jakupan
 
-            parts  = folder.name.rsplit("_", 1)
-            _name  = parts[0]
-            jumin6 = parts[1][:6] if len(parts) > 1 else ""
-            out = make_jakupan(_name, jumin6, force_jangbu=force_jangbu)
-            if out:
-                await update.message.reply_text(
-                    f"작업판 생성 완료: {out.name}"
-                )
-            else:
-                await update.message.reply_text(
-                    f"작업판 생성 실패 — 기존 파일이 있으면 그대로 전송합니다."
-                )
-        except Exception as e:
-            logger.error("[do_work] 작업판 재생성 오류: %s", e, exc_info=True)
-            await update.message.reply_text(
-                f"작업판 재생성 오류: {e}\n기존 파일이 있으면 그대로 전송합니다."
-            )
+        parts  = folder.name.rsplit("_", 1)
+        _name  = parts[0]
+        jumin6 = parts[1][:6] if len(parts) > 1 else ""
+        out = make_jakupan(_name, jumin6, force_jangbu=force_jangbu)
+        if not out:
+            await update.message.reply_text("⚠️ 작업판 생성 실패 — 기존 파일이 있으면 그대로 전송합니다.")
+    except Exception as e:
+        logger.error("[do_work] 작업판 재생성 오류: %s", e, exc_info=True)
+        await update.message.reply_text(f"⚠️ 작업판 재생성 오류: {e}\n기존 파일이 있으면 그대로 전송합니다.")
 
     files_to_send = []
     root_files = sorted([f for f in folder.iterdir() if f.is_file()],
