@@ -108,7 +108,33 @@ CLEAR_CELLS = [
 ]
 
 
-def fill_puri(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw):
+def detect_income_from_files(folder: Path) -> set:
+    """지급명세서/간이용역소득 폴더 파일명에서 소득종류 감지
+    반환: {"사업소득", "기타소득", "연금소득", "근로소득", "이자소득", "배당소득"} 중 해당 항목
+    """
+    import unicodedata
+    found = set()
+    keywords = {
+        "사업소득": "사업소득",
+        "기타소득": "기타소득",
+        "연금소득": "연금소득",
+        "근로소득": "근로소득",
+        "이자소득": "이자소득",
+        "배당소득": "배당소득",
+    }
+    for sub in ["지급명세서", "간이용역소득"]:
+        d = folder / sub
+        if not d.is_dir():
+            continue
+        for f in d.iterdir():
+            fname = unicodedata.normalize("NFC", f.name)
+            for kw in keywords:
+                if kw in fname:
+                    found.add(kw)
+    return found
+
+
+def fill_puri(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw, file_income_types=None):
     """프리 시트 노랑셀 자동 입력"""
 
     # 초기화
@@ -177,27 +203,30 @@ def fill_puri(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw):
     else:
         ws_puri["D11"].value = None
 
+    fit = file_income_types or set()  # 파일명 기반 소득종류
+
     # 근로소득
     근로단일 = str(ann_raw.get("근로(단일)", "X"))
     근로복수 = str(ann_raw.get("근로(복수)", "X"))
-    if "O" in (근로단일, 근로복수):
+    if "O" in (근로단일, 근로복수) or "근로소득" in fit:
         ws_puri["D12"].value = "해당"
     else:
         ws_puri["D12"].value = "N/A"
 
     # 연금
     연금 = str(ann_raw.get("연금", "X"))
-    ws_puri["D13"].value = "해당" if "O" in 연금 else None
+    ws_puri["D13"].value = "해당" if ("O" in 연금 or "연금소득" in fit) else None
 
     # 기타
     기타 = str(ann_raw.get("기타", "X"))
-    ws_puri["D14"].value = "해당" if "O" in 기타 else "N/A"
+    ws_puri["D14"].value = "해당" if ("O" in 기타 or "기타소득" in fit) else "N/A"
     ws_puri["E14"].value = 0
 
     # 금융 (이자+배당)
     이자 = str(ann_raw.get("이자", "X"))
     배당 = str(ann_raw.get("배당", "X"))
-    ws_puri["D15"].value = "해당" if ("O" in 이자 or "O" in 배당) else None
+    ws_puri["D15"].value = "해당" if ("O" in 이자 or "O" in 배당
+                                      or "이자소득" in fit or "배당소득" in fit) else None
 
     # 주택임대 (안내문에 별도 표시 없음 → 기본 0)
     ws_puri["E16"].value = 0
@@ -250,6 +279,9 @@ def make_jakupan(name, jumin6=""):
     biz_rows   = parse_anneam_biz(anneam_pdf) if anneam_pdf else []
     ganyi_rows = read_ganyi(folder, jumin6)
 
+    # 지급명세서/간이용역소득 폴더 파일명에서 소득종류 감지
+    file_income_types = detect_income_from_files(folder)
+
     # 템플릿·시트 자동 선택
     기장의무 = str(ann_raw.get("기장의무", "")).strip()
     template_path, sheet_name = select_template_and_sheet(biz_rows, 기장의무)
@@ -275,14 +307,18 @@ def make_jakupan(name, jumin6=""):
 
     # 작업판 시트 채우기
     ws_puri = wb[sheet_name]
-    fill_puri(ws_puri, name, ann_raw, biz_rows, ganyi_rows, ann_raw)
+    fill_puri(ws_puri, name, ann_raw, biz_rows, ganyi_rows, ann_raw, file_income_types)
 
     # 작업준비 시트 추가
     add_jakupjunbi_sheet(wb, name, jumin6, folder)
 
     # 저장
     out = folder / f"작업판_{name}.xlsx"
-    wb.save(out)
+    try:
+        wb.save(out)
+    except PermissionError:
+        print(f"  [스킵] {out.name} - Excel에서 열려있음. 닫고 다시 실행하세요.")
+        return None
     return out
 
 
