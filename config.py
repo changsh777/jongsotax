@@ -5,17 +5,21 @@
 """
 from pathlib import Path
 import os
+import platform
 
 # ----- 환경 선택 -----
 # 환경변수 SEOTAX_ENV로 바꿀 수 있음 ('local' or 'nas')
 ENV = os.environ.get("SEOTAX_ENV", "local")
 
 # ----- 경로 정의 -----
-if ENV == "nas":
-    # NAS 운영 (Z: 드라이브 마운트, 192.168.0.100)
+if platform.system() == "Darwin":
+    # 맥미니 — NAS SMB 마운트
+    BASE = Path("/Volumes/장성환/종소세2026")
+elif ENV == "nas":
+    # Windows NAS (Z: 드라이브 마운트)
     BASE = Path(r"Z:\종소세2026")
 else:
-    # 로컬 테스트
+    # Windows 로컬 테스트
     BASE = Path(r"F:\종소세2026")
 
 # NAS 폴더 구조
