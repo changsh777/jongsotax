@@ -811,7 +811,9 @@ async def cmd_전신고서(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     import unicodedata
 
-    name_arg = " ".join(context.args).strip() if context.args else ""
+    text = update.message.text.strip()
+    parts = text.split(None, 1)   # ['/전신고서', '홍길동'] 또는 ['/전신고서']
+    name_arg = parts[1].strip() if len(parts) > 1 else ""
 
     # ── 이름 지정: 해당 고객 작업판 생성 ─────────────────────────
     if name_arg:
@@ -906,7 +908,10 @@ def main():
     app.add_handler(CommandHandler("agree",   cmd_status))        # /agree 강동수
     app.add_handler(CommandHandler("send",    cmd_send))          # /send 강동수
     app.add_handler(CommandHandler("pkg",     cmd_pkg))           # /pkg 강동수 (출력패키지 재생성)
-    app.add_handler(CommandHandler("전신고서", cmd_전신고서))      # /전신고서 (2024년 신고서 현황)
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/전신고서'),
+        cmd_전신고서
+    ))                                                              # /전신고서 (2024년 신고서 현황)
     app.add_handler(MessageHandler(filters.Document.ALL,            handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
