@@ -237,6 +237,44 @@ def fill_puri(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw, file_income_typ
     ws_puri["E16"].value = 0
 
 
+def fill_puri_복식(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw, file_income_types=None):
+    """복식부기 시트 노랑셀 자동 입력 — 노란색(FFFFFF00) 셀만 초기화, 검은색/수식 절대 건드리지 않음"""
+
+    # 노란색 셀만 초기화
+    for row in ws_puri.iter_rows():
+        for cell in row:
+            try:
+                if cell.fill and cell.fill.fgColor.rgb == 'FFFFFF00':
+                    cell.value = None
+            except Exception:
+                pass
+
+    # ── 장부유형 ──────────────────────────────────────────────
+    gijang   = str(ann.get("기장의무", "")).strip()
+    수입합계 = to_num(ann.get("수입금액총계", 0)) or 0
+
+    if "복식부기" in gijang:
+        ws_puri["D3"].value = "해당"
+        if 수입합계 >= 60_000_000:
+            ws_puri["D5"].value = "해당"
+
+    # ── 소득종류 ──────────────────────────────────────────────
+    fit = file_income_types or set()
+
+    has_bizno_reg = any(bz.get("사업자번호") for bz in biz_rows)
+    if has_bizno_reg:
+        ws_puri["D11"].value = "해당"
+
+    has_freelance = any(not bz.get("사업자번호") for bz in biz_rows) or bool(ganyi_rows)
+    if has_freelance:
+        ws_puri["D11"].value = "해당"
+
+    근로단일 = str(ann_raw.get("근로(단일)", "X"))
+    근로복수 = str(ann_raw.get("근로(복수)", "X"))
+    if "O" in (근로단일, 근로복수) or "근로소득" in fit:
+        ws_puri["D12"].value = "해당"
+
+
 # ── 작업준비 시트 추가 ──────────────────────────────────────────
 def add_jakupjunbi_sheet(wb, name, jumin6, folder):
     """작업판 워크북에 작업준비 시트 추가"""
@@ -327,7 +365,10 @@ def make_jakupan(name, jumin6="", force_jangbu: str = ""):
 
     # 작업판 시트 채우기
     ws_puri = wb[sheet_name]
-    fill_puri(ws_puri, name, ann_raw, biz_rows, ganyi_rows, ann_raw, file_income_types)
+    if "복식" in sheet_name:
+        fill_puri_복식(ws_puri, name, ann_raw, biz_rows, ganyi_rows, ann_raw, file_income_types)
+    else:
+        fill_puri(ws_puri, name, ann_raw, biz_rows, ganyi_rows, ann_raw, file_income_types)
 
     # 작업준비 시트 추가
     add_jakupjunbi_sheet(wb, name, jumin6, folder)
