@@ -384,9 +384,15 @@ async def do_work(update: Update, folder: Path):
     if ann:
         files_to_send.append(ann[0])
 
-    # 2. 전년도 자료
+    # 2. 전년도 자료 (전년도종소세신고내역 엑셀 + 수동 저장한 전년도 신고서 PDF)
     prev = [f for f in root_files if "전년도종소세신고내역" in nfc(f.name)]
     files_to_send.extend(prev)
+
+    # 전년도 신고서 PDF (예: 20250513_2024신고서_홍길동.pdf — 신고서.pdf 제외)
+    prev_pdf = [f for f in root_files
+                if "신고서" in nfc(f.name) and f.suffix == ".pdf"
+                and f.name != "신고서.pdf"]
+    files_to_send.extend(prev_pdf)
 
     # 3. 작업판 엑셀 (최신 1개)
     wp = [f for f in root_files if nfc(f.name).startswith("작업판_") and f.suffix == ".xlsx"]
