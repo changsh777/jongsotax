@@ -515,12 +515,28 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
     # 0. 신고 안내자료 탭 클릭
     _click_anneam_tab(page)
 
-    # 1. 지급명세서 팝업 열기 (locator.click = user gesture → popup 렌더 트리거)
+    # 1. 지급명세서 팝업 열기
     btn = page.locator(f"#{JIPGUM_BTN_ID}")
     if not btn.is_visible(timeout=3000):
         print(f"    [지급명세서] 버튼 없음 - 스킵", flush=True)
         return False
-    btn.click()
+
+    # WebSquare 처리 모달(wq_proessMsgModal)이 버튼을 가릴 수 있으므로 사라질 때까지 대기
+    for _w in range(30):
+        modal_blocking = page.evaluate("""
+            () => {
+                for (const m of document.querySelectorAll('.w2_proc_modal')) {
+                    if (window.getComputedStyle(m).display !== 'none') return true;
+                }
+                return false;
+            }
+        """)
+        if not modal_blocking:
+            break
+        time.sleep(0.5)
+
+    # evaluate로 클릭 (모달 intercept 우회)
+    page.evaluate(f"document.getElementById('{JIPGUM_BTN_ID}')?.click()")
     time.sleep(3)
 
     # 2. 팝업 열렸는지 확인 (display 방식: position:absolute 는 offsetParent 있으나 안전하게 display 체크)
@@ -595,44 +611,45 @@ def download_jipgum_pdf(ctx, page, folder, name, jumin_raw):
                 return True
         return False
 
-    # 3. trigger193 클릭 후 ClipReport 탭 폴링 (expect_page는 잡지 못하는 경우가 있어 탭 직접 탐색)
-    page.evaluate(f"""
-        () => {{
-            const sc = window['{_SCWIN_KEY}'];
-            if (sc && sc.trigger193_onclick_ev) sc.trigger193_onclick_ev();
-            else document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger193')?.click();
-        }}
-    """)
-
-    # ClipReport 탭 폴링 (최대 30초)
+    # 3. trigger193 locator.click → expect_page (사용자 제스처 필요 - 팝업 차단 방지)
     pdf_popup = None
-    for _ in range(60):
-        time.sleep(0.5)
-        for pg in ctx.pages:
-            try:
-                url = pg.url
-            except Exception:
-                continue
-            if 'clipreport' in url.lower():
-                pdf_popup = pg
+    trigger_btn = page.locator(f"#{JIPGUM_POPUP_ID}_wframe_trigger193")
+    try:
+        with ctx.expect_page(timeout=30000) as popup_info:
+            trigger_btn.click(timeout=5000)
+        pdf_popup = popup_info.value
+        print(f"    [지급명세서] expect_page 성공: {pdf_popup.url[:60]}", flush=True)
+    except Exception as _e:
+        print(f"    [지급명세서] expect_page 실패({type(_e).__name__}) → evaluate fallback", flush=True)
+        # fallback: evaluate + 탭 직접 폴링
+        page.evaluate(f"""
+            () => {{
+                const sc = window['{_SCWIN_KEY}'];
+                if (sc && sc.trigger193_onclick_ev) sc.trigger193_onclick_ev();
+                else document.getElementById('{JIPGUM_POPUP_ID}_wframe_trigger193')?.click();
+            }}
+        """)
+        for _ in range(60):
+            time.sleep(0.5)
+            for pg in ctx.pages:
+                try:
+                    url = pg.url
+                except Exception:
+                    continue
+                if 'clipreport' in url.lower():
+                    pdf_popup = pg
+                    break
+                if url.startswith('edge://') or url.startswith('chrome://'):
+                    print(f"    [지급명세서] Edge 다운로드 탭: {url[:50]}", flush=True)
+                    try: pg.close()
+                    except Exception: pass
+                    if _poll_downloads_for_new_pdf(20):
+                        return True
+            if pdf_popup:
                 break
-        if pdf_popup:
-            break
-        # edge:// / chrome:// 다운로드 탭 처리
-        for pg in ctx.pages:
-            try:
-                url = pg.url
-            except Exception:
-                continue
-            if url.startswith('edge://') or url.startswith('chrome://'):
-                print(f"    [지급명세서] Edge 다운로드 탭: {url[:50]}", flush=True)
-                try: pg.close()
-                except Exception: pass
-                if _poll_downloads_for_new_pdf(20):
-                    return True
 
     if not pdf_popup:
-        print(f"    [지급명세서] ClipReport 못 찾음 (30초): {[pg.url[:40] for pg in ctx.pages]}", flush=True)
+        print(f"    [지급명세서] ClipReport 못 찾음: {[pg.url[:40] for pg in ctx.pages]}", flush=True)
         if _poll_downloads_for_new_pdf(10):
             return True
         try:

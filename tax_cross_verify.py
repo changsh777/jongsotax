@@ -151,24 +151,27 @@ def parse_tax_return(pdf_path: Path) -> dict:
     m_up = re.search(r'⑧\s*주\s*업\s*종\s*코\s*드\s*([\d]{6})', p2)
     result["업종코드"] = m_up.group(1) if m_up else ""
 
-    # 총수입금액 (p2 ⑨)
-    m_rev = re.search(r'⑨\s*총\s*수\s*입\s*금\s*액\s*([\d,]+)', p2)
+    # 총수입금액 (p2 ⑨) — 사업장 2개 이상이면 같은 줄에 숫자 여러 개 → 합산
+    m_rev = re.search(r'⑨\s*총\s*수\s*입\s*금\s*액([^\n]+)', p2)
     if m_rev:
-        result["총수입금액"] = int(m_rev.group(1).replace(",", ""))
+        nums = re.findall(r'[\d,]+', m_rev.group(1))
+        result["총수입금액"] = sum(int(n.replace(",", "")) for n in nums) if nums else None
     else:
         result["총수입금액"] = None
 
-    # 필요경비 (p2 ⑩)
-    m_exp = re.search(r'⑩\s*필\s*요\s*경\s*비\s*([\d,]+)', p2)
+    # 필요경비 (p2 ⑩) — 사업장 2개 이상이면 합산
+    m_exp = re.search(r'⑩\s*필\s*요\s*경\s*비([^\n]+)', p2)
     if m_exp:
-        result["필요경비"] = int(m_exp.group(1).replace(",", ""))
+        nums = re.findall(r'[\d,]+', m_exp.group(1))
+        result["필요경비"] = sum(int(n.replace(",", "")) for n in nums) if nums else None
     else:
         result["필요경비"] = None
 
-    # 소득금액 = ⑪소득금액 or 종합소득금액 19 (p1)
-    m_inc = re.search(r'⑪\s*소\s*득\s*금\s*액.*?([\d,]+)', p2)
+    # 소득금액 = ⑪소득금액(⑨-⑩) — 사업장 2개 이상이면 합산 (같은 줄만)
+    m_inc = re.search(r'⑪\s*소\s*득\s*금\s*액([^\n]+)', p2)
     if m_inc:
-        result["소득금액"] = int(m_inc.group(1).replace(",", ""))
+        nums = re.findall(r'[\d,]+', m_inc.group(1))
+        result["소득금액"] = sum(int(n.replace(",", "")) for n in nums) if nums else None
     else:
         m_inc2 = re.search(r'종\s+합\s+소\s+득\s+금\s+액\s+\d+\s+([\d,]+)', p1)
         result["소득금액"] = int(m_inc2.group(1).replace(",", "")) if m_inc2 else None
