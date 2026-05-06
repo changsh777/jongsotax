@@ -280,7 +280,17 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc or not (doc.file_name or "").endswith(".pdf"):
         return
 
-    name = Path(doc.file_name).stem.strip()
+    fname = doc.file_name or ""
+    fname_lower = fname.lower()
+
+    # 25년 신고서만 처리 (파일명에 "25"+"신고서" 둘 다 있어야)
+    is_25_singoser = "25" in fname and "신고서" in fname_lower
+    if not is_25_singoser:
+        return  # 조건 불만족 → 무시
+
+    # 고객명: 캡션 우선, 없으면 파일명에서 추출
+    caption = (update.message.caption or "").strip()
+    name    = caption if caption else Path(fname).stem.strip()
 
     if not nas_ok():
         await nas_fail(update); return
