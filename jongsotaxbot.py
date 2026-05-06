@@ -224,7 +224,7 @@ def _merge_pdfs_sync(pdf_list: list, out_path: Path) -> bool:
         return False
 
 
-def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path: Path) -> Path | None:
+def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path: Path):
     """
     출력패키지 PDF 생성 (동기 — run_in_executor 로 호출):
       1. 검증보고서 (HTML → PDF)
