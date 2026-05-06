@@ -64,9 +64,10 @@ def classify_files(folder: Path) -> dict:
     result["기타"] = []
 
     def _match(fname: str) -> str | None:
-        fl = fname.lower()
+        import unicodedata
+        fl = unicodedata.normalize("NFC", fname.lower())
         for role, kws in ROLES.items():
-            if any(kw.lower() in fl for kw in kws):
+            if any(unicodedata.normalize("NFC", kw.lower()) in fl for kw in kws):
                 return role
         return None
 
