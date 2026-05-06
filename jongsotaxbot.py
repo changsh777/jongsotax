@@ -5,12 +5,15 @@ jongsotaxbot.py - 종소세 작업 전용 텔레그램 봇 (@jongsotax_bot)
   /work 강동수       NAS에서 파일 꺼내서 전송 (안내문+전년도+부가세+작업시트)
   /agree 강동수      진행 상태 조회
   /send 강동수       접수증+납부서 링크 발송 (게이트 포함)
-  /pkg 강동수        출력패키지 PDF 재생성 (이름.xls + 검증보고서 필요)
+  /pkg 강동수        출력패키지 PDF 재생성 (작업결과_이름.xls + 검증보고서 필요)
+
+파일 업로드 자동 처리:
   25강동수신고서.pdf 업로드 → NAS 신고서.pdf 저장 + 교차검증 + 출력패키지 자동 생성
+  작업결과_강동수.xls 업로드 → NAS 폴더 저장 + 업로드자+관리자 알림
 
 자동 흐름 (신고서 업로드 시):
-  [이름.xls 있음] → 검증보고서(HTML) + 출력패키지 PDF (검증+소득+작업준비+안내문1p) 발송
-  [이름.xls 없음] → 검증보고서(HTML)만 발송 + "이름.xls를 NAS 폴더에 넣어주세요" 안내
+  [작업결과_이름.xls 있음] → 검증보고서(HTML) + 출력패키지 PDF (검증+소득+작업준비+안내문1p) 발송
+  [작업결과_이름.xls 없음] → 검증보고서(HTML)만 발송 + "작업결과 엑셀 넣어주세요" 안내
 
 실행: python3 ~/종소세2026/jongsotaxbot.py
 """
@@ -121,6 +124,9 @@ async def resolve_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await do_status(update, folder)
         elif action == "출력패키지":
             await do_pkg(update, context, folder)
+        elif action == "작업결과":
+            tg_file, fname = extra
+            await do_save_작업결과(update, context, folder, tg_file, fname)
     except ValueError:
         pass
     return True
@@ -517,13 +523,12 @@ async def do_status(update: Update, folder: Path):
 
     parts = folder.name.rsplit("_", 1)
     _name = parts[0]
-    xls_path = folder / f"{_name}.xls"
 
     items = {
         "안내문 파싱":    chk("종소세안내문_*.pdf"),
         "신고서":         (folder / "신고서.pdf").exists(),
         "검증보고서":     chk("검증보고서_*.html"),
-        f"{_name}.xls":  xls_path.exists(),
+        "작업결과 엑셀":  chk("작업결과_*.xls") or chk("작업결과_*.xlsx"),
         "출력패키지":     chk("출력패키지_*.pdf"),
         "접수증":         (folder / "접수증.pdf").exists(),
         "납부서":         (folder / "납부서.pdf").exists(),
@@ -606,12 +611,16 @@ async def do_pkg(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Pat
     """출력패키지 PDF 재생성 — /pkg 명령어 또는 내부 호출"""
     parts = folder.name.rsplit("_", 1)
     _name = parts[0]
-    xls_path = folder / f"{_name}.xls"
+    xls_files = sorted(
+        nfc_glob(folder, "작업결과_*.xls") + nfc_glob(folder, "작업결과_*.xlsx"),
+        key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    xls_path = xls_files[0] if xls_files else None
 
-    if not xls_path.exists():
+    if not xls_path:
         await update.message.reply_text(
-            f"❌ *{_name}.xls* 없음\n"
-            f"NAS `{folder.name}/` 폴더에 작업결과 엑셀을 먼저 넣어주세요.",
+            f"❌ 작업결과 엑셀 없음\n"
+            f"NAS `{folder.name}/` 폴더에 *작업결과_{_name}.xls* 를 먼저 넣어주세요.",
             parse_mode="Markdown"
         )
         return
@@ -641,7 +650,7 @@ async def do_pkg(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Pat
         await update.message.reply_text("⚠️ 출력패키지 생성 실패 — 로그 확인 필요")
 
 
-# ===== 파일 수신: 이름25신고서.pdf → 신고서 저장 + 검증 + 출력패키지 =====
+# ===== 파일 수신 =====
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
 
@@ -650,11 +659,38 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     doc = update.message.document
-    if not doc or not (doc.file_name or "").endswith(".pdf"):
+    if not doc:
         return
 
     fname = doc.file_name or ""
     fname_lower = fname.lower()
+
+    # ── 작업결과 엑셀: 작업결과_이름.xls / .xlsx ──────────────────
+    is_작업결과 = (
+        fname_lower.startswith("작업결과_") and
+        (fname_lower.endswith(".xls") or fname_lower.endswith(".xlsx"))
+    )
+    if is_작업결과:
+        stem = Path(fname).stem            # 작업결과_홍길동
+        name = stem[len("작업결과_"):]    # 홍길동
+        if not name:
+            await update.message.reply_text("파일명 오류: 작업결과_이름.xls 형식으로 올려주세요.")
+            return
+        if not nas_ok():
+            await nas_fail(update); return
+        folders = find_folders(name)
+        if not folders:
+            await update.message.reply_text(f"'{name}' 폴더 없음 — 이름 확인 필요"); return
+        tg_file = await doc.get_file()
+        if len(folders) > 1:
+            await ask_choice(update, update.effective_user.id, folders, "작업결과", (tg_file, fname))
+            return
+        await do_save_작업결과(update, context, folders[0], tg_file, fname)
+        return
+
+    # ── 신고서 PDF: 25이름신고서.pdf / 2024전기신고서 ──────────────
+    if not fname_lower.endswith(".pdf"):
+        return
 
     # 25년 신고서 또는 2024 전기신고서 처리
     is_25_singoser = "25" in fname and "신고서" in fname_lower
@@ -752,26 +788,30 @@ async def do_save_singoser(update: Update, context: ContextTypes.DEFAULT_TYPE, f
         await update.message.reply_text("⚠️ 검증보고서 생성 실패 — 수동 실행 필요")
         return
 
-    # ── 이름.xls 확인 → 출력패키지 또는 검증보고서만 ──────────────
-    parts    = folder.name.rsplit("_", 1)
-    _name    = parts[0]
-    xls_path = folder / f"{_name}.xls"
+    # ── 작업결과 엑셀 확인 → 출력패키지 또는 검증보고서만 ──────────
+    parts     = folder.name.rsplit("_", 1)
+    _name     = parts[0]
+    xls_files = sorted(
+        nfc_glob(folder, "작업결과_*.xls") + nfc_glob(folder, "작업결과_*.xlsx"),
+        key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    xls_path  = xls_files[0] if xls_files else None
     sender_id = update.effective_chat.id
 
     # 검증보고서(HTML)는 항상 전송 (인터랙티브 확인용)
     await _send_html_report(context, update, html_path, folder, sender_id)
 
-    if not xls_path.exists():
+    if not xls_path:
         # 작업결과 엑셀 없음 → 안내 메시지
         await update.message.reply_text(
-            f"📝 출력패키지를 만들려면 *{_name}.xls* (작업결과 엑셀)를\n"
-            f"NAS `{folder.name}/` 폴더에 넣어주세요.\n"
-            f"넣은 후 /pkg {_name} 명령어로 생성하세요.",
+            f"📝 출력패키지를 만들려면 *작업결과_{_name}.xls* (작업결과 엑셀)를\n"
+            f"텔레그램으로 업로드해주세요.\n"
+            f"업로드 후 자동 저장되며, /pkg {_name} 명령어로 패키지 생성 가능합니다.",
             parse_mode="Markdown"
         )
     else:
-        # 이름.xls 있음 → 출력패키지 자동 생성
-        await update.message.reply_text(f"📦 {_name}.xls 발견! 출력패키지 생성 중 (잠시 대기)...")
+        # 작업결과 엑셀 있음 → 출력패키지 자동 생성
+        await update.message.reply_text(f"📦 {xls_path.name} 발견! 출력패키지 생성 중 (잠시 대기)...")
         loop = asyncio.get_running_loop()
         pkg_path = await loop.run_in_executor(
             None, _make_print_package_sync, folder, _name, html_path, xls_path
@@ -799,6 +839,58 @@ async def do_save_전기신고서(update: Update, folder: Path, tg_file, fname: 
     await tg_file.download_to_drive(str(target))
     logger.info("전기신고서 저장: %s", target)
     await update.message.reply_text(f"✅ {folder.name}/{fname} 저장 완료")
+
+
+async def do_save_작업결과(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                           folder: Path, tg_file, fname: str):
+    """
+    작업결과_이름.xls 저장 → 업로드자 reply + 관리자 DM
+    [ULTRA CRITICAL] 기존 작업결과_*.xls* → _archive 이동 후 저장
+    """
+    archive = folder / "_archive"
+
+    # 기존 작업결과 파일 archive 이동
+    old_files = nfc_glob(folder, "작업결과_*.xls") + nfc_glob(folder, "작업결과_*.xlsx")
+    if old_files:
+        archive.mkdir(exist_ok=True)
+        for old in old_files:
+            ts = datetime.fromtimestamp(old.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+            new_name = f"{old.stem}_{ts}{old.suffix}"
+            try:
+                old.rename(archive / new_name)
+                logger.info("archive 이동: %s → %s", old.name, new_name)
+            except Exception as e:
+                logger.warning("archive 이동 실패: %s — %s", old.name, e)
+
+    target = folder / fname
+    await tg_file.download_to_drive(str(target))
+    logger.info("작업결과 저장: %s", target)
+
+    parts = folder.name.rsplit("_", 1)
+    _name = parts[0]
+    sender_id = update.effective_chat.id
+    sender_name = update.effective_user.full_name or update.effective_user.username or str(sender_id)
+
+    # 업로드자에게 확인
+    await update.message.reply_text(
+        f"✅ *{_name}* 작업결과 저장 완료\n"
+        f"📁 `{folder.name}/{fname}`\n"
+        f"신고서 업로드 후 출력패키지가 자동 생성됩니다.",
+        parse_mode="Markdown"
+    )
+
+    # 관리자에게 DM (업로드자가 관리자가 아닌 경우)
+    if sender_id != ADMIN_CHAT_ID:
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                f"📥 *{_name}* 작업결과 저장됨\n"
+                f"업로드: {sender_name}\n"
+                f"파일: `{fname}`"
+            ),
+            parse_mode="Markdown"
+        )
+        logger.info("관리자 알림 전송: %s 작업결과 (업로드: %s)", _name, sender_name)
 
 
 # ===== 자정 배치: 혼입 검증 =====
