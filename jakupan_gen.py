@@ -139,12 +139,14 @@ def detect_income_from_files(folder: Path) -> set:
 def fill_puri(ws_puri, name, ann, biz_rows, ganyi_rows, ann_raw, file_income_types=None):
     """프리 시트 노랑셀 자동 입력"""
 
-    # 초기화 (수식 셀은 보존)
-    for addr in CLEAR_CELLS:
-        v = ws_puri[addr].value
-        if isinstance(v, str) and v.startswith('='):
-            continue  # 수식 보존
-        ws_puri[addr].value = None
+    # 노란색(FFFFFF00) 셀만 초기화 — 검은색/수식 셀 절대 건드리지 않음
+    for row in ws_puri.iter_rows():
+        for cell in row:
+            try:
+                if cell.fill and cell.fill.fgColor.rgb == 'FFFFFF00':
+                    cell.value = None
+            except Exception:
+                pass
 
     # 성명
     ws_puri["B2"].value = name
