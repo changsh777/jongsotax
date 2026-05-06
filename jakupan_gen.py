@@ -14,7 +14,9 @@ jakupan_gen.py - 작업판 엑셀에 고객 데이터 자동 입력
 import sys, io, os
 _saved_stdout = sys.stdout
 os.environ.setdefault("SEOTAX_ENV", "nas")
-sys.path.insert(0, r"F:\종소세2026")
+_proj = str(__import__('pathlib').Path(__file__).resolve().parent)
+if _proj not in sys.path:
+    sys.path.insert(0, _proj)
 
 import openpyxl
 from openpyxl import load_workbook
@@ -26,13 +28,13 @@ import xlrd, re
 from parse_to_xlsx import parse_anneam, parse_prev_income_xlsx
 sys.stdout = _saved_stdout
 
-from config import CUSTOMER_DIR, OUTPUT_DIR
+from config import CUSTOMER_DIR, OUTPUT_DIR, TEMPLATES_DIR
 from gsheet_writer import get_credentials
 import gspread
 
 # ── 템플릿 경로 ──────────────────────────────────────────────────
-TEMPLATE_간편 = Path(r"F:\종소세2026\templates\빈양식_간편장부.xlsx")
-TEMPLATE_복식 = Path(r"F:\종소세2026\templates\빈양식_복식부기.xlsx")
+TEMPLATE_간편 = TEMPLATES_DIR / "빈양식_간편장부.xlsx"
+TEMPLATE_복식 = TEMPLATES_DIR / "빈양식_복식부기.xlsx"
 
 
 def select_template_and_sheet(biz_rows: list, 기장의무: str) -> tuple:
