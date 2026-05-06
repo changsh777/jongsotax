@@ -135,34 +135,35 @@ def parse_tax_return(pdf_path: Path) -> dict:
         except Exception:
             return None
 
-    # 귀속연도
-    m_yr = re.search(r'\((\d{4})년귀속\)', p1)
+    # 귀속연도 — PDF에 따라 글자 사이 공백 삽입 케이스 대응
+    p1_nsp = re.sub(r'\s', '', p1)   # 공백 제거본으로 검색
+    m_yr = re.search(r'\((\d{4})년귀속\)', p1_nsp)
     result["귀속연도"] = int(m_yr.group(1)) if m_yr else None
 
     # 기장의무·신고유형
     m_gij = re.search(r'기\s*장\s*의\s*무.*?(간편장부대상자|복식부기의무자)', p1)
     result["기장의무"] = m_gij.group(1) if m_gij else ""
 
-    # 업종코드 (p2)
-    m_up = re.search(r'⑧주\s*업\s*종\s*코\s*드\s+(\d{6})', p2)
+    # 업종코드 (p2) — 기호와 한글 사이 공백 대응
+    m_up = re.search(r'⑧\s*주\s*업\s*종\s*코\s*드\s*([\d]{6})', p2)
     result["업종코드"] = m_up.group(1) if m_up else ""
 
     # 총수입금액 (p2 ⑨)
-    m_rev = re.search(r'⑨총\s*수\s*입\s*금\s*액\s+([\d,]+)', p2)
+    m_rev = re.search(r'⑨\s*총\s*수\s*입\s*금\s*액\s*([\d,]+)', p2)
     if m_rev:
         result["총수입금액"] = int(m_rev.group(1).replace(",", ""))
     else:
         result["총수입금액"] = None
 
     # 필요경비 (p2 ⑩)
-    m_exp = re.search(r'⑩필\s*요\s*경\s*비\s+([\d,]+)', p2)
+    m_exp = re.search(r'⑩\s*필\s*요\s*경\s*비\s*([\d,]+)', p2)
     if m_exp:
         result["필요경비"] = int(m_exp.group(1).replace(",", ""))
     else:
         result["필요경비"] = None
 
     # 소득금액 = ⑪소득금액 or 종합소득금액 19 (p1)
-    m_inc = re.search(r'⑪소\s*득\s*금\s*액.*?\s+([\d,]+)', p2)
+    m_inc = re.search(r'⑪\s*소\s*득\s*금\s*액.*?([\d,]+)', p2)
     if m_inc:
         result["소득금액"] = int(m_inc.group(1).replace(",", ""))
     else:
@@ -189,10 +190,12 @@ def parse_tax_return(pdf_path: Path) -> dict:
     m_cr = re.search(r'세\s+액\s+공\s+제\s+25\s+([\d,]+)', p1)
     result["세액공제"] = int(m_cr.group(1).replace(",", "")) if m_cr else None
 
-    # 결정세액 (합계 28)
+    # 결정세액 (합계 28) — 공백 삽입 PDF 포함 3단계 패턴
     m_det = re.search(r'합\s+계\s*\(.*?26.*?27.*?\)\s+28\s+([\d,]+)', p1)
     if not m_det:
         m_det = re.search(r'합\s+계\(26\s*\+27\s*\)\s+28\s+([\d,]+)', p1)
+    if not m_det:  # 숫자 사이 공백 있는 케이스 (복식부기 PDF)
+        m_det = re.search(r'합\s*계\s*\(\s*2\s*6\s*\+\s*2\s*7\s*\)\s*2\s*8\s*([\d,]+)', p1)
     result["결정세액"] = int(m_det.group(1).replace(",", "")) if m_det else None
 
     # 기납부세액 (32)
