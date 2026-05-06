@@ -11,9 +11,16 @@ tax_cross_verify.py  —  종소세 교차검증 보고서 생성기
 """
 
 from __future__ import annotations
-import sys, io, os, re
+import sys, io, os, re, unicodedata, fnmatch
 from pathlib import Path
 from datetime import datetime
+
+
+def nfc_glob(folder, pattern: str):
+    """Mac SMB NFD 파일명 대응 glob"""
+    nfc_pat = unicodedata.normalize("NFC", pattern)
+    return [p for p in folder.iterdir()
+            if fnmatch.fnmatch(unicodedata.normalize("NFC", p.name), nfc_pat)]
 
 # stdout utf-8 강제 (한글 터미널 오류 방지)
 if hasattr(sys.stdout, 'reconfigure'):
@@ -957,17 +964,18 @@ def generate_html(
 # ═══════════════════════════════════════════════════════════════════
 
 def find_folder(name: str, jumin6: str = "") -> Path | None:
-    candidates = list(CUSTOMER_DIR.glob(f"{name}_*"))
+    nfc_name = unicodedata.normalize("NFC", name)
+    candidates = [p for p in CUSTOMER_DIR.iterdir()
+                  if p.is_dir() and unicodedata.normalize("NFC", p.name).startswith(f"{nfc_name}_")]
     if not candidates:
         p = CUSTOMER_DIR / name
         return p if p.is_dir() else None
     if jumin6:
         exact = [c for c in candidates
-                 if c.name.endswith(f"_{jumin6}") and c.is_dir()]
+                 if unicodedata.normalize("NFC", c.name).endswith(f"_{jumin6}")]
         if exact:
             return exact[0]
-    dirs = [c for c in candidates if c.is_dir()]
-    return dirs[0] if dirs else None
+    return candidates[0] if candidates else None
 
 
 def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:

@@ -29,6 +29,7 @@ from telegram.ext import (
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import CUSTOMER_DIR as NAS_BASE
+from print_sheet import nfc_glob
 
 # ===== 설정 =====
 TOKEN          = "REDACTED_TOKEN_1"
@@ -308,7 +309,7 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
             logger.warning("[패키지] Excel PDF 처리 실패: %s", e)
 
         # ─ 3. 안내문 첫 페이지 ──────────────────────────────────
-        ann_files = sorted(folder.glob("종소세안내문_*.pdf"),
+        ann_files = sorted(nfc_glob(folder, "종소세안내문_*.pdf"),
                            key=lambda p: p.stat().st_mtime, reverse=True)
         if ann_files:
             pdf_ann = tmpdir / "04_안내문1p.pdf"
@@ -322,7 +323,7 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
             return None
 
         # 기존 출력패키지 archive
-        old_pkgs = list(folder.glob("출력패키지_*.pdf"))
+        old_pkgs = nfc_glob(folder, "출력패키지_*.pdf")
         if old_pkgs:
             arch = folder / "_archive"
             arch.mkdir(exist_ok=True)
@@ -523,7 +524,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def do_status(update: Update, folder: Path):
     def chk(pattern):
-        return bool(list(folder.glob(pattern)))
+        return bool(nfc_glob(folder, pattern))
 
     parts = folder.name.rsplit("_", 1)
     _name = parts[0]
@@ -627,7 +628,7 @@ async def do_pkg(update: Update, context: ContextTypes.DEFAULT_TYPE, folder: Pat
         return
 
     # 검증보고서 HTML 찾기
-    html_files = sorted(folder.glob("검증보고서_*.html"),
+    html_files = sorted(nfc_glob(folder, "검증보고서_*.html"),
                         key=lambda p: p.stat().st_mtime, reverse=True)
     if not html_files:
         await update.message.reply_text(

@@ -1,23 +1,32 @@
 """
-print_package.py  —  A4 출력 패키지 생성기
+print_package.py  —  결제용 A4 출력 패키지 생성기
 세무회계창연 | 2026
 
-출력 순서:
+출력 순서 (결제용):
   1. 검증보고서    (검증보고서_*.html  → PDF)
-  2. 작업판       (작업판_*.xlsx 작업판 시트  → PDF)
-  3. 작업준비     (작업판_*.xlsx 작업준비 시트 → PDF)
+  2. 작업결과 소득시트  ({이름}.xls 프리/사업자복식/... 시트 → PDF)
+  3. 작업결과 작업준비  ({이름}.xls 작업준비_* 시트 → PDF)
   4. 안내문 1페이지 (종소세안내문_*.pdf 1페이지)
 
 → 합쳐서: 출력패키지_{이름}_{날짜}.pdf
+
+※ {이름}.xls = 직원이 작업 완료 후 저장한 작업결과 파일
 
 사용법:
   python print_package.py 박현민 870529
   python print_package.py --all
 """
 
-import sys, io, os, re, shutil, tempfile
+import sys, io, os, re, shutil, tempfile, unicodedata, fnmatch
 from pathlib import Path
 from datetime import datetime
+
+
+def nfc_glob(folder, pattern: str):
+    """Mac SMB NFD 파일명 대응 glob"""
+    nfc_pat = unicodedata.normalize("NFC", pattern)
+    return [p for p in folder.iterdir()
+            if fnmatch.fnmatch(unicodedata.normalize("NFC", p.name), nfc_pat)]
 
 sys.path.insert(0, r"F:\종소세2026")
 os.environ.setdefault("SEOTAX_ENV", "nas")
@@ -41,7 +50,9 @@ WORKPAN_SHEETS = {"프리", "사업자복식", "프리복식", "사업자+프리
 # ═══════════════════════════════════════════════════════════════════
 
 def find_folder(name: str, jumin6: str = "") -> Path | None:
-    candidates = list(CUSTOMER_DIR.glob(f"{name}_*"))
+    nfc_name = unicodedata.normalize("NFC", name)
+    candidates = [p for p in CUSTOMER_DIR.iterdir()
+                  if p.is_dir() and unicodedata.normalize("NFC", p.name).startswith(f"{nfc_name}_")]
     if not candidates:
         p = CUSTOMER_DIR / name
         return p if p.is_dir() else None
@@ -163,7 +174,7 @@ def make_package(name: str, jumin6: str = "") -> Path | None:
 
     try:
         # ── 1. 검증보고서 HTML → PDF ──────────────────────────────
-        html_files = sorted(folder.glob("검증보고서_*.html"),
+        html_files = sorted(nfc_glob(folder, "검증보고서_*.html"),
                             key=lambda p: p.stat().st_mtime, reverse=True)
         if html_files:
             latest_html = html_files[0]
@@ -178,7 +189,7 @@ def make_package(name: str, jumin6: str = "") -> Path | None:
             print(f"\n  [1] 검증보고서: 없음 — tax_cross_verify.py 먼저 실행")
 
         # ── 2. 작업판 시트 → PDF ──────────────────────────────────
-        jakup_files = sorted(folder.glob("작업판_*.xlsx"),
+        jakup_files = sorted(nfc_glob(folder, "작업판_*.xlsx"),
                              key=lambda p: p.stat().st_mtime, reverse=True)
         if jakup_files:
             xlsx = jakup_files[0]
@@ -222,7 +233,7 @@ def make_package(name: str, jumin6: str = "") -> Path | None:
             print(f"\n  [2/3] 작업판 xlsx 없음 — jakupan_gen.py 먼저 실행")
 
         # ── 4. 안내문 첫 페이지 ───────────────────────────────────
-        ann_files = sorted(folder.glob("종소세안내문_*.pdf"),
+        ann_files = sorted(nfc_glob(folder, "종소세안내문_*.pdf"),
                            key=lambda p: p.stat().st_mtime, reverse=True)
         if ann_files:
             ann = ann_files[0]

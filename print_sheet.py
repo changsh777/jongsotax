@@ -107,6 +107,15 @@ def apply_border(ws, r1, r2, c1, c2):
             ws.cell(r, c).border = B
 
 
+# ── NFC glob 유틸 (Mac SMB NFD 대응) ────────────────────────────
+def nfc_glob(folder, pattern: str):
+    """Mac SMB NFD 파일명 대응 glob — fnmatch + NFC 비교"""
+    import unicodedata, fnmatch
+    nfc_pat = unicodedata.normalize("NFC", pattern)
+    return [p for p in folder.iterdir()
+            if fnmatch.fnmatch(unicodedata.normalize("NFC", p.name), nfc_pat)]
+
+
 # ── 데이터 읽기 ─────────────────────────────────────────────────
 def find_folder(name, jumin6):
     import unicodedata
@@ -182,7 +191,7 @@ def parse_jibup_pdf(folder):
     jdir = folder / "지급명세서"
     if not jdir.is_dir():
         return []
-    pdfs = list(jdir.glob("*.pdf"))
+    pdfs = nfc_glob(jdir, "*.pdf")
     if not pdfs:
         return []
 
@@ -218,7 +227,7 @@ def read_ganyi(folder, jumin6=""):
     if not gdir.is_dir():
         return []
     rows = []
-    for xf in gdir.glob("*.xlsx"):
+    for xf in nfc_glob(gdir, "*.xlsx"):
         try:
             # 먼저 암호화 여부 확인
             with open(xf, 'rb') as f:
@@ -268,7 +277,7 @@ def read_ganyi(folder, jumin6=""):
 def read_vat_raw(folder):
     """부가세 xlsx → {bizno: [(row...), ...]} — 실제 데이터 있는 것만"""
     result = {}
-    for f in folder.glob("부가세신고내역_*.xlsx"):
+    for f in nfc_glob(folder, "부가세신고내역_*.xlsx"):
         bizno = f.stem.replace("부가세신고내역_", "")
         try:
             wb = openpyxl.load_workbook(f, data_only=True)
