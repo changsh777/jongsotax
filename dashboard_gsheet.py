@@ -250,7 +250,7 @@ def write_dashboard(ws, rows_data, generated, spreadsheet_id=SPREADSHEET_ID):
 
     # 전체 클리어 후 쓰기
     ws.clear()
-    ws.update(f"A1", all_rows, value_input_option="USER_ENTERED")
+    ws.update(all_rows, "A1", value_input_option="USER_ENTERED")
 
     # 열 너비 자동 조정
     ws.columns_auto_resize(0, len(HEADER_ROW))
