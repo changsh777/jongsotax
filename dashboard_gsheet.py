@@ -150,7 +150,13 @@ def _fmt(path):
     if path is None:
         return ""
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%m/%d")
+        from datetime import date as _date
+        dt = datetime.fromtimestamp(path.stat().st_mtime)
+        today = datetime.today()
+        if dt.month == today.month and dt.year == today.year:
+            return f"{dt.day}일"       # 이번 달: "7일"
+        else:
+            return f"{dt.month}/{dt.day}"  # 다른 달: "4/16"
     except Exception:
         return "✓"
 
