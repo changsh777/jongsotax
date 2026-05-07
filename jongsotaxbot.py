@@ -229,38 +229,35 @@ def _sheet_to_pdf_sync(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
 
 def _sheet_to_pdf_libreoffice(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
     """LibreOffice로 특정 시트 → PDF (macOS용, Excel 불필요)
-    전략: 임시 복사본에서 타겟 외 시트를 veryHidden 처리 → LibreOffice 변환
-    - 삭제 방식(구): Named Range 깨짐 → #NAME? 오류
-    - 페이지 추출 방식(구): 시트별 페이지 수 달라 인덱스 오류
-    - veryHidden 방식(현): 시트 존재 유지(Named Range 보존) + 숨겨진 시트는 PDF 미포함
+    전략: data_only=True 로드 → 수식이 캐시값으로 대체 → Named Range 의존 없음
+          타겟 외 시트 삭제 → 단일 시트 xlsx → LibreOffice 변환
     """
     import subprocess, shutil as _sh, unicodedata as _ud
     try:
         import openpyxl
 
-        # 1. 원본 복사
-        tmp_dir = Path(tempfile.mkdtemp(prefix="lo_pdf_"))
-        tmp_xlsx = tmp_dir / xls_path.name
-        _sh.copy2(str(xls_path), str(tmp_xlsx))
-
-        # 2. 타겟 외 시트 veryHidden 처리 (삭제 X → Named Range 보존)
-        wb = openpyxl.load_workbook(str(tmp_xlsx))
+        # 1. data_only=True: 수식 셀 → 마지막 저장된 캐시값 (Named Range 참조 불필요)
+        wb = openpyxl.load_workbook(str(xls_path), data_only=True)
         nfc_target = _ud.normalize("NFC", sheet_name)
-        found = False
-        for ws in wb.worksheets:
-            if _ud.normalize("NFC", ws.title) == nfc_target:
-                ws.sheet_state = "visible"
-                found = True
-            else:
-                ws.sheet_state = "veryHidden"
+        found = any(_ud.normalize("NFC", ws.title) == nfc_target for ws in wb.worksheets)
         if not found:
             logger.warning("[패키지] 시트 '%s' 없음 (목록: %s)", sheet_name, wb.sheetnames)
-            _sh.rmtree(tmp_dir, ignore_errors=True)
+            wb.close()
             return False
+
+        # 2. 타겟 외 시트 삭제 (data_only이므로 수식 없음 → Named Range 깨짐 없음)
+        to_del = [ws.title for ws in wb.worksheets
+                  if _ud.normalize("NFC", ws.title) != nfc_target]
+        for sn in to_del:
+            del wb[sn]
+
+        # 3. 임시 파일 저장
+        tmp_dir = Path(tempfile.mkdtemp(prefix="lo_pdf_"))
+        tmp_xlsx = tmp_dir / xls_path.name
         wb.save(str(tmp_xlsx))
         wb.close()
 
-        # 3. LibreOffice 변환 (veryHidden 시트는 PDF에 포함 안 됨)
+        # 4. LibreOffice 변환 (시트 1개 → PDF 1세트)
         result = subprocess.run(
             ["libreoffice", "--headless", "--convert-to", "pdf",
              "--outdir", str(tmp_dir), str(tmp_xlsx)],
