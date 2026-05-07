@@ -158,30 +158,31 @@ def parse_tax_return(pdf_path: Path) -> dict:
     m_up = re.search(r'⑧\s*주\s*업\s*종\s*코\s*드\s*([\d]{6})', p2)
     result["업종코드"] = m_up.group(1) if m_up else ""
 
+    def _parse_multi_col(raw: str) -> int | None:
+        """복식부기 다중사업장 숫자 파싱
+        - 마지막 숫자 == 앞 숫자들의 합 → 합계열 있음 → 마지막 반환
+        - 그 외(합계열 없음 또는 단일 사업장) → 모두 합산
+        """
+        nums_raw = re.findall(r'[\d,]+', raw)
+        if not nums_raw:
+            return None
+        nums_int = [int(n.replace(",", "")) for n in nums_raw]
+        if len(nums_int) >= 2 and nums_int[-1] == sum(nums_int[:-1]):
+            return nums_int[-1]   # 합계열 있음
+        return sum(nums_int)      # 합계열 없음 → 전체 합산
+
     # 총수입금액 (p2 ⑨)
-    # 복식부기: [사업1] [사업2] ... [합계] → 마지막 숫자 = 합계열
-    # 간편/추계: 숫자 1개 → last = 그 숫자
-    # sum() 방식은 사업1+사업2+합계 = 2배 오류 → nums[-1]로 수정
     m_rev = re.search(r'⑨\s*총\s*수\s*입\s*금\s*액([^\n]+)', p2)
-    if m_rev:
-        nums = re.findall(r'[\d,]+', m_rev.group(1))
-        result["총수입금액"] = int(nums[-1].replace(",", "")) if nums else None
-    else:
-        result["총수입금액"] = None
+    result["총수입금액"] = _parse_multi_col(m_rev.group(1)) if m_rev else None
 
-    # 필요경비 (p2 ⑩) — 복식부기 합계열 = 마지막 숫자
+    # 필요경비 (p2 ⑩)
     m_exp = re.search(r'⑩\s*필\s*요\s*경\s*비([^\n]+)', p2)
-    if m_exp:
-        nums = re.findall(r'[\d,]+', m_exp.group(1))
-        result["필요경비"] = int(nums[-1].replace(",", "")) if nums else None
-    else:
-        result["필요경비"] = None
+    result["필요경비"] = _parse_multi_col(m_exp.group(1)) if m_exp else None
 
-    # 소득금액 ⑪ — 복식부기 합계열 = 마지막 숫자
+    # 소득금액 ⑪
     m_inc = re.search(r'⑪\s*소\s*득\s*금\s*액([^\n]+)', p2)
     if m_inc:
-        nums = re.findall(r'[\d,]+', m_inc.group(1))
-        result["소득금액"] = int(nums[-1].replace(",", "")) if nums else None
+        result["소득금액"] = _parse_multi_col(m_inc.group(1))
     else:
         m_inc2 = re.search(r'종\s+합\s+소\s+득\s+금\s+액\s+\d+\s+([\d,]+)', p1)
         result["소득금액"] = int(m_inc2.group(1).replace(",", "")) if m_inc2 else None
