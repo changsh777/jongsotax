@@ -194,7 +194,7 @@ def _html_to_pdf_sync(html_path: Path, pdf_path: Path) -> bool:
 
 
 def _sheet_to_pdf_sync(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
-    """xlwings로 특정 시트 → PDF 변환 (Excel 필요)"""
+    """xlwings로 특정 시트 → PDF 변환 (Windows + Excel 필요)"""
     app = None
     wb  = None
     try:
@@ -225,6 +225,39 @@ def _sheet_to_pdf_sync(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
         if app:
             try: app.quit()
             except Exception: pass
+
+
+def _sheet_to_pdf_libreoffice(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
+    """LibreOffice로 특정 시트 → PDF (macOS용, Excel 불필요)"""
+    import subprocess, shutil as _sh
+    try:
+        import openpyxl
+        # 원본 복사 → 해당 시트만 남기고 임시 xlsx 저장
+        tmp_xlsx = Path(tempfile.mktemp(suffix=".xlsx"))
+        _sh.copy2(str(xls_path), str(tmp_xlsx))
+        wb = openpyxl.load_workbook(str(tmp_xlsx))
+        for sn in [s for s in wb.sheetnames if s != sheet_name]:
+            del wb[sn]
+        wb.save(str(tmp_xlsx))
+
+        # LibreOffice headless 변환
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "pdf",
+             "--outdir", str(tmp_xlsx.parent), str(tmp_xlsx)],
+            capture_output=True, timeout=60, text=True
+        )
+
+        converted = tmp_xlsx.with_suffix(".pdf")
+        if converted.exists():
+            _sh.move(str(converted), str(pdf_path))
+            tmp_xlsx.unlink(missing_ok=True)
+            return True
+        logger.warning("[패키지] LibreOffice 변환 결과 없음 (stderr: %s)", result.stderr[:200])
+        tmp_xlsx.unlink(missing_ok=True)
+        return False
+    except Exception as e:
+        logger.warning("[패키지] LibreOffice 시트 PDF 실패 (%s): %s", sheet_name, e)
+        return False
 
 
 def _extract_first_page_sync(pdf_in: Path, pdf_out: Path) -> bool:
@@ -282,59 +315,90 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
             logger.warning("[패키지] 검증보고서 PDF 실패 — 스킵")
 
         # ─ 2. 작업결과 엑셀 시트 → PDF ──────────────────────────
-        # xlwings 앱을 한 번만 열고 모든 시트 변환 후 종료
-        # (시트마다 앱을 재시작하면 macOS 데몬 환경에서 실패 위험)
-        try:
-            import xlwings as xw
-            _app = xw.App(visible=False, add_book=False)
-            _app.display_alerts = False
+        # Windows: xlwings + Excel / macOS: LibreOffice (Excel 불필요)
+        import platform
+        _is_mac = platform.system() == "Darwin"
+
+        if _is_mac:
+            # ── macOS: LibreOffice ──────────────────────────────
             try:
-                _wb = _app.books.open(str(xls_path))
-                sheet_names = [s.name for s in _wb.sheets]
+                import openpyxl
+                wb_tmp = openpyxl.load_workbook(str(xls_path), read_only=True, data_only=True)
+                sheet_names = wb_tmp.sheetnames
+                wb_tmp.close()
                 logger.info("[패키지] 시트 목록: %s", sheet_names)
 
-                # 소득시트 (프리/복식 작업판 — 직원 입력값 있는 시트)
                 workpan = next((s for s in sheet_names if s in WORKPAN_SHEETS), None)
                 if workpan:
                     pdf_wp = tmpdir / "02_소득시트.pdf"
-                    try:
-                        _wb.sheets[workpan].api.ExportAsFixedFormat(
-                            Type=0, Filename=str(pdf_wp),
-                            Quality=0, IncludeDocProperties=True,
-                            IgnorePrintAreas=False, OpenAfterPublish=False,
-                        )
+                    if _sheet_to_pdf_libreoffice(xls_path, workpan, pdf_wp):
                         pdf_parts.append(pdf_wp)
                         logger.info("[패키지] 소득시트 '%s' PDF 완료", workpan)
-                    except Exception as e:
-                        logger.warning("[패키지] 소득시트 '%s' PDF 실패: %s", workpan, e)
+                    else:
+                        logger.warning("[패키지] 소득시트 '%s' PDF 실패", workpan)
                 else:
                     logger.warning("[패키지] 소득시트 없음 (시트 목록: %s)", sheet_names)
 
-                # 작업준비 시트
                 junbi = next((s for s in sheet_names if s.startswith("작업준비_")), None)
                 if junbi:
                     pdf_jj = tmpdir / "03_작업준비.pdf"
-                    try:
-                        _wb.sheets[junbi].api.ExportAsFixedFormat(
-                            Type=0, Filename=str(pdf_jj),
-                            Quality=0, IncludeDocProperties=True,
-                            IgnorePrintAreas=False, OpenAfterPublish=False,
-                        )
+                    if _sheet_to_pdf_libreoffice(xls_path, junbi, pdf_jj):
                         pdf_parts.append(pdf_jj)
                         logger.info("[패키지] 작업준비 '%s' PDF 완료", junbi)
-                    except Exception as e:
-                        logger.warning("[패키지] 작업준비 '%s' PDF 실패: %s", junbi, e)
+                    else:
+                        logger.warning("[패키지] 작업준비 '%s' PDF 실패", junbi)
+            except Exception as e:
+                logger.warning("[패키지] macOS Excel PDF 처리 실패: %s", e)
 
-            finally:
-                try: _wb.close()
-                except Exception: pass
-                try: _app.quit()
-                except Exception: pass
+        else:
+            # ── Windows: xlwings + Excel ────────────────────────
+            try:
+                import xlwings as xw
+                _app = xw.App(visible=False, add_book=False)
+                _app.display_alerts = False
+                try:
+                    _wb = _app.books.open(str(xls_path))
+                    sheet_names = [s.name for s in _wb.sheets]
+                    logger.info("[패키지] 시트 목록: %s", sheet_names)
 
-        except ImportError:
-            logger.warning("[패키지] xlwings 없음 — Excel 시트 PDF 스킵 (Excel 설치 필요)")
-        except Exception as e:
-            logger.warning("[패키지] Excel PDF 처리 실패: %s", e)
+                    workpan = next((s for s in sheet_names if s in WORKPAN_SHEETS), None)
+                    if workpan:
+                        pdf_wp = tmpdir / "02_소득시트.pdf"
+                        try:
+                            _wb.sheets[workpan].api.ExportAsFixedFormat(
+                                Type=0, Filename=str(pdf_wp),
+                                Quality=0, IncludeDocProperties=True,
+                                IgnorePrintAreas=False, OpenAfterPublish=False,
+                            )
+                            pdf_parts.append(pdf_wp)
+                            logger.info("[패키지] 소득시트 '%s' PDF 완료", workpan)
+                        except Exception as e:
+                            logger.warning("[패키지] 소득시트 '%s' PDF 실패: %s", workpan, e)
+                    else:
+                        logger.warning("[패키지] 소득시트 없음 (시트 목록: %s)", sheet_names)
+
+                    junbi = next((s for s in sheet_names if s.startswith("작업준비_")), None)
+                    if junbi:
+                        pdf_jj = tmpdir / "03_작업준비.pdf"
+                        try:
+                            _wb.sheets[junbi].api.ExportAsFixedFormat(
+                                Type=0, Filename=str(pdf_jj),
+                                Quality=0, IncludeDocProperties=True,
+                                IgnorePrintAreas=False, OpenAfterPublish=False,
+                            )
+                            pdf_parts.append(pdf_jj)
+                            logger.info("[패키지] 작업준비 '%s' PDF 완료", junbi)
+                        except Exception as e:
+                            logger.warning("[패키지] 작업준비 '%s' PDF 실패: %s", junbi, e)
+                finally:
+                    try: _wb.close()
+                    except Exception: pass
+                    try: _app.quit()
+                    except Exception: pass
+            except ImportError:
+                logger.warning("[패키지] xlwings 없음 — Excel 시트 PDF 스킵")
+            except Exception as e:
+                logger.warning("[패키지] Windows Excel PDF 처리 실패: %s", e)
 
         # ─ 3. 안내문 첫 페이지 ──────────────────────────────────
         ann_files = sorted(nfc_glob(folder, "종소세안내문_*.pdf"),
