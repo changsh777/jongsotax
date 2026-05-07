@@ -41,6 +41,12 @@ NAS_URL        = "https://nas.taxenglab.com/종소세2026/고객"    # Cloudflar
 
 ALLOWED_USERS: list[int] = []  # 빈 리스트 = 전체 허용
 
+# 텔레그램 username → 직원 표시명 매핑
+WORKER_NAMES: dict[str, str] = {
+    "cytax1": "지해",
+    "cytax2": "지훈",
+}
+
 # 작업결과 엑셀 내 소득시트 목록 (이름.xls 에서 찾을 시트)
 WORKPAN_SHEETS = {"프리", "사업자복식", "프리복식", "사업자+프리", "사업자+사업자", "프리+프리"}
 
@@ -82,6 +88,12 @@ def is_allowed(update: Update) -> bool:
     if not ALLOWED_USERS:
         return True
     return update.effective_user.id in ALLOWED_USERS
+
+
+def worker_name(user) -> str:
+    """텔레그램 username → 직원 표시명. 매핑 없으면 full_name 반환."""
+    uname = (user.username or "").lstrip("@")
+    return WORKER_NAMES.get(uname, user.full_name or uname or str(user.id))
 
 
 async def nas_fail(update: Update):
@@ -478,7 +490,7 @@ async def _send_html_report(context: ContextTypes.DEFAULT_TYPE, update: Update,
         with open(html_path, "rb") as fp:
             await context.bot.send_document(
                 chat_id=ADMIN_CHAT_ID, document=fp, filename=html_path.name,
-                caption=f"{caption} (직원: {update.effective_user.full_name})"
+                caption=f"{caption} (직원: {worker_name(update.effective_user)})"
             )
 
 
@@ -498,7 +510,7 @@ async def _send_package(context: ContextTypes.DEFAULT_TYPE, update: Update,
         with open(pkg_path, "rb") as fp:
             await context.bot.send_document(
                 chat_id=ADMIN_CHAT_ID, document=fp, filename=pkg_path.name,
-                caption=f"{caption} (직원: {update.effective_user.full_name})"
+                caption=f"{caption} (직원: {worker_name(update.effective_user)})"
             )
 
 
