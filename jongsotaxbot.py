@@ -228,34 +228,53 @@ def _sheet_to_pdf_sync(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
 
 
 def _sheet_to_pdf_libreoffice(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
-    """LibreOffice로 특정 시트 → PDF (macOS용, Excel 불필요)"""
-    import subprocess, shutil as _sh
+    """LibreOffice로 특정 시트 → PDF (macOS용, Excel 불필요)
+    전략: 원본 그대로 전체 변환 → 해당 시트 인덱스 페이지 추출
+    (시트 삭제 방식은 Named Range 깨짐 → #NAME? 오류 발생)
+    """
+    import subprocess, shutil as _sh, unicodedata as _ud
     try:
-        import openpyxl, unicodedata as _ud
-        # 원본 복사 → 해당 시트만 남기고 임시 xlsx 저장
-        tmp_xlsx = Path(tempfile.mktemp(suffix=".xlsx"))
-        _sh.copy2(str(xls_path), str(tmp_xlsx))
-        wb = openpyxl.load_workbook(str(tmp_xlsx))
-        nfc_target = _ud.normalize("NFC", sheet_name)
-        for sn in [s for s in wb.sheetnames if _ud.normalize("NFC", s) != nfc_target]:
-            del wb[sn]
-        wb.save(str(tmp_xlsx))
+        import openpyxl, PyPDF2
 
-        # LibreOffice headless 변환
+        # 1. 시트 인덱스 파악 (NFC 정규화)
+        wb = openpyxl.load_workbook(str(xls_path), read_only=True)
+        nfc_names = [_ud.normalize("NFC", s) for s in wb.sheetnames]
+        nfc_target = _ud.normalize("NFC", sheet_name)
+        wb.close()
+        if nfc_target not in nfc_names:
+            logger.warning("[패키지] 시트 '%s' 없음 (목록: %s)", sheet_name, nfc_names)
+            return False
+        sheet_idx = nfc_names.index(nfc_target)
+
+        # 2. 전체 xlsx → PDF (원본 그대로 — Named Range 보존)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="lo_pdf_"))
         result = subprocess.run(
             ["libreoffice", "--headless", "--convert-to", "pdf",
-             "--outdir", str(tmp_xlsx.parent), str(tmp_xlsx)],
-            capture_output=True, timeout=60, text=True
+             "--outdir", str(tmp_dir), str(xls_path)],
+            capture_output=True, timeout=90, text=True
         )
+        tmp_pdf = tmp_dir / (xls_path.stem + ".pdf")
+        if not tmp_pdf.exists():
+            logger.warning("[패키지] LibreOffice 변환 실패 (stderr: %s)", result.stderr[:300])
+            _sh.rmtree(tmp_dir, ignore_errors=True)
+            return False
 
-        converted = tmp_xlsx.with_suffix(".pdf")
-        if converted.exists():
-            _sh.move(str(converted), str(pdf_path))
-            tmp_xlsx.unlink(missing_ok=True)
-            return True
-        logger.warning("[패키지] LibreOffice 변환 결과 없음 (stderr: %s)", result.stderr[:200])
-        tmp_xlsx.unlink(missing_ok=True)
-        return False
+        # 3. 해당 시트 페이지 추출 (시트 1개 = PDF 1페이지 가정)
+        reader = PyPDF2.PdfReader(str(tmp_pdf))
+        total = len(reader.pages)
+        logger.info("[패키지] 전체 변환 %d페이지, 시트 '%s' 인덱스=%d", total, sheet_name, sheet_idx)
+
+        if sheet_idx >= total:
+            logger.warning("[패키지] 페이지 수(%d) < 시트 인덱스(%d) — 마지막 페이지 사용", total, sheet_idx)
+            sheet_idx = total - 1
+
+        writer = PyPDF2.PdfWriter()
+        writer.add_page(reader.pages[sheet_idx])
+        with open(pdf_path, "wb") as f:
+            writer.write(f)
+
+        _sh.rmtree(tmp_dir, ignore_errors=True)
+        return True
     except Exception as e:
         logger.warning("[패키지] LibreOffice 시트 PDF 실패 (%s): %s", sheet_name, e)
         return False
