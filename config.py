@@ -75,7 +75,8 @@ def customer_folder(name: str, jumin: str = "") -> Path:
 
     모든 자동화 스크립트가 이 함수만 사용 (경로 직접 조립 금지)
     """
-    jumin_front = str(jumin).replace("-", "")[:6]  # 앞 6자리만
+    import re
+    jumin_front = re.sub(r'[^0-9]', '', str(jumin))[:6]  # 숫자만, 앞 6자리
     folder_name = f"{name}_{jumin_front}" if jumin_front else name
     folder = CUSTOMER_DIR / folder_name
     # 하위 폴더도 함께 생성

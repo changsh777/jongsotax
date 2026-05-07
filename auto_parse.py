@@ -165,9 +165,10 @@ def main():
         if not name or name in seen:
             continue  # 이미 처리/알림한 고객
 
+        import re as _re
         pw    = str(r.get("홈택스비번", "") or "").strip()
-        jumin = str(r.get("주민번호", "") or "").replace("-", "").strip()
-        if jumin.isdigit() and len(jumin) < 13:
+        jumin = _re.sub(r'[^0-9]', '', str(r.get("주민번호", "") or ""))  # 숫자만
+        if jumin and len(jumin) < 13:
             jumin = jumin.zfill(13)
 
         if not has_pdf(name):
