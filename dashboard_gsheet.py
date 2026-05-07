@@ -10,6 +10,7 @@ dashboard_gsheet.py — 고객 폴더 현황 → 구글시트 대시보드
 
 import os
 import sys
+import time
 import platform
 import unicodedata
 import pickle
@@ -277,10 +278,13 @@ def run():
     rows_data = scan_folders()
     print(f"  {len(rows_data)}명 발견")
 
-    for sid, label in [
+    for idx, (sid, label) in enumerate([
         (SPREADSHEET_ID,       "내부용"),
         (STAFF_SPREADSHEET_ID, "직원공유용"),
-    ]:
+    ]):
+        if idx > 0:
+            print("  구글 API 쿼타 대기 (65초)...")
+            time.sleep(65)
         print(f"구글시트 연결 중... ({label})")
         ws = get_worksheet(sid)
         print(f"  시트: {SHEET_NAME} (id={ws.id})")
