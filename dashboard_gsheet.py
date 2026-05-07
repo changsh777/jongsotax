@@ -38,8 +38,9 @@ SCOPES        = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
-SHEET_NAME     = "현황대시보드"
+SPREADSHEET_ID       = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"  # 세무사 내부용
+STAFF_SPREADSHEET_ID = "1ht7fk381ei8fJ33KpigeMSaEdjlOifVFzgN2Dyy-dpk"  # 직원 공유용
+SHEET_NAME           = "현황대시보드"
 
 
 # ── 컬럼 정의 ─────────────────────────────────────────────────────────────
@@ -129,9 +130,9 @@ def get_credentials():
     return creds
 
 
-def get_worksheet():
+def get_worksheet(spreadsheet_id=SPREADSHEET_ID):
     gc = gspread.authorize(get_credentials())
-    sh = gc.open_by_key(SPREADSHEET_ID)
+    sh = gc.open_by_key(spreadsheet_id)
     try:
         ws = sh.worksheet(SHEET_NAME)
     except gspread.WorksheetNotFound:
@@ -236,7 +237,7 @@ def build_requests(ws_id, rows_data):
     return requests
 
 
-def write_dashboard(ws, rows_data, generated):
+def write_dashboard(ws, rows_data, generated, spreadsheet_id=SPREADSHEET_ID):
     print("  헤더 + 데이터 쓰는 중...")
     all_rows = [HEADER_ROW]
 
@@ -259,7 +260,7 @@ def write_dashboard(ws, rows_data, generated):
 
     # batch_update (100개씩 나눠서)
     gc = gspread.authorize(get_credentials())
-    sh = gc.open_by_key(SPREADSHEET_ID)
+    sh = gc.open_by_key(spreadsheet_id)
     for i in range(0, len(requests), 100):
         sh.batch_update({"requests": requests[i:i+100]})
 
@@ -276,12 +277,15 @@ def run():
     rows_data = scan_folders()
     print(f"  {len(rows_data)}명 발견")
 
-    print("구글시트 연결 중...")
-    ws = get_worksheet()
-    print(f"  시트: {SHEET_NAME} (id={ws.id})")
-
-    write_dashboard(ws, rows_data, generated)
-    print(f"\n✅ 완료: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
+    for sid, label in [
+        (SPREADSHEET_ID,       "내부용"),
+        (STAFF_SPREADSHEET_ID, "직원공유용"),
+    ]:
+        print(f"구글시트 연결 중... ({label})")
+        ws = get_worksheet(sid)
+        print(f"  시트: {SHEET_NAME} (id={ws.id})")
+        write_dashboard(ws, rows_data, generated, spreadsheet_id=sid)
+        print(f"  ✅ {label}: https://docs.google.com/spreadsheets/d/{sid}")
 
 
 if __name__ == "__main__":
