@@ -410,7 +410,20 @@ def cross_verify(
     """
     results = []
 
-    def add(섹션, 항목, lbl1, v1, lbl2, v2, 상태, 메모="", diff=None):
+    _AUTO = object()   # sentinel: diff 자동계산
+    # diff=None → 차이 칸 숨김, diff=_AUTO(기본) → v1-v2 자동계산, diff=숫자 → 명시값
+
+    def add(섹션, 항목, lbl1, v1, lbl2, v2, 상태, 메모="", diff=_AUTO):
+        if diff is None:
+            computed = None          # 명시적 숨김
+        elif diff is not _AUTO:
+            computed = diff          # 명시값
+        else:
+            computed = (             # 자동계산
+                (v1 or 0) - (v2 or 0)
+                if isinstance(v1, (int, float)) and isinstance(v2, (int, float))
+                else None
+            )
         results.append({
             "섹션": 섹션,
             "항목": 항목,
@@ -418,11 +431,7 @@ def cross_verify(
             "값1": v1,
             "값2_label": lbl2,
             "값2": v2,
-            "차이": diff if diff is not None else (
-                (v1 or 0) - (v2 or 0)
-                if isinstance(v1, (int, float)) and isinstance(v2, (int, float))
-                else None
-            ),
+            "차이": computed,
             "상태": 상태,
             "메모": 메모,
         })
@@ -436,19 +445,19 @@ def cross_verify(
     if rev_신고 is not None and rev_지급 is not None:
         diff = rev_신고 - rev_지급
         add("수입금액", "신고서 vs 지급명세서",
-            "신고서", rev_신고, "지급명세서 합계", rev_지급,
+            "[신고서] 총수입금액(⑨)", rev_신고, "[지급명세서] 지급총액 합계", rev_지급,
             "pass" if diff == 0 else "fail",
             메모="" if diff == 0 else f"차이 {diff:,}원",
             diff=diff)
     elif rev_신고 is None:
         add("수입금액", "신고서 vs 지급명세서",
-            "신고서", "파싱실패", "지급명세서", rev_지급, "warn", "신고서 파싱 실패")
+            "[신고서] 총수입금액", "파싱실패", "[지급명세서]", rev_지급, "warn", "신고서 파싱 실패")
 
     # A2. 신고서 vs 안내문
     if rev_신고 is not None and rev_안내 is not None:
         diff = rev_신고 - rev_안내
         add("수입금액", "신고서 vs 안내문",
-            "신고서", rev_신고, "안내문", rev_안내,
+            "[신고서] 총수입금액(⑨)", rev_신고, "[안내문] 수입금액 총계", rev_안내,
             "pass" if diff == 0 else "fail",
             메모="" if diff == 0 else f"차이 {diff:,}원",
             diff=diff)
@@ -458,37 +467,40 @@ def cross_verify(
     pre_안내 = 안내문.get("기납부세액")
     pre_지급 = sum(d["소득세"] for d in 지급명세서) if 지급명세서 else None
 
-    # B1. 신고서 vs 지급명세서
+    # B0. 신고서(32번) vs 안내문 — 직원 입력 체크
+    if pre_신고 is not None and pre_안내 is not None:
+        diff = pre_신고 - pre_안내
+        add("원천징수세액", "신고서 vs 안내문 (직원 입력 체크)",
+            "[신고서] 기납부세액(32번)", pre_신고,
+            "[안내문] 원천징수세액", pre_안내,
+            "pass" if diff == 0 else "fail",
+            메모="" if diff == 0 else f"차이 {diff:,}원 — 직원 입력값 확인 필요",
+            diff=diff)
+
+    # B1. 신고서(32번) vs 지급명세서 소득세 합계 — 원천징수 완전성
     if pre_신고 is not None and pre_지급 is not None:
         diff = pre_신고 - pre_지급
-        add("원천징수세액", "신고서 vs 지급명세서",
-            "기납부세액(신고)", pre_신고, "지급명세서 소득세", pre_지급,
+        add("원천징수세액", "신고서 vs 지급명세서 (원천징수 완전성)",
+            "[신고서] 기납부세액(32번)", pre_신고,
+            "[지급명세서] 소득세 합계", pre_지급,
             "pass" if diff == 0 else "fail",
             메모="" if diff == 0 else f"차이 {diff:,}원",
             diff=diff)
+    # B2 제거: 안내문 vs 지급명세서 (신고서==안내문이면 중복)
 
-    # B2. 안내문 vs 지급명세서
-    if pre_안내 is not None and pre_지급 is not None:
-        diff = pre_안내 - pre_지급
-        add("원천징수세액", "안내문 vs 지급명세서",
-            "안내문 기납부", pre_안내, "지급명세서 소득세", pre_지급,
-            "pass" if diff == 0 else "fail",
-            메모="" if diff == 0 else f"차이 {diff:,}원",
-            diff=diff)
-
-    # ── C. 거래처별 1:1 대조 ──────────────────────────────────────
-    # 지급명세서 xlsx (상세 내역) vs 지급명세서 PDF 없을 경우 xlsx만
-    # 여기서는 xlsx 내역을 직접 사용
+    # ── C. 거래처별 — 지급명세서 내역 (참고용) ─────────────────────
+    # 개별 row: 지급총액·소득세 참고용 (지급총액-소득세 차이는 무의미 → diff=None)
+    # 합산 row 제거: 원천징수세액 B1에서 동일 비교 수행
     for d in 지급명세서:
         biz = d["사업자번호"]
         amt = d["지급총액"]
         tax = d["소득세"]
         징수 = d["징수의무자"]
-        # 일단 개별 업체 row → warn 없으면 pass
         add("거래처별", f"{징수}({biz})",
-            "지급총액", amt, "소득세", tax,
+            "[지급명세서] 지급총액", amt, "[지급명세서] 소득세", tax,
             "pass",
-            메모=f"소득세율 {tax/amt*100:.1f}%" if amt else "")
+            메모=f"소득세율 {tax/amt*100:.1f}%" if amt else "",
+            diff=None)   # 지급총액-소득세 차이는 무의미
 
     # ── D. 세액 계산 검증 ─────────────────────────────────────────
     과세표준 = 당기신고서.get("과세표준")
@@ -529,7 +541,7 @@ def cross_verify(
 
         diff = 산출세액_신고 - 산출세액_계산
         add("세액계산", f"과세표준×세율-누진공제",
-            "신고 산출세액", 산출세액_신고, "계산 산출세액", 산출세액_계산,
+            "[신고서] 산출세액(23번)", 산출세액_신고, "[계산] 과세표준×세율-누진공제", 산출세액_계산,
             "pass" if abs(diff) <= 1 else "fail",
             메모="" if abs(diff) <= 1 else f"차이 {diff:,}원 (반올림 허용 ±1)",
             diff=diff)
@@ -548,7 +560,7 @@ def cross_verify(
         else:
             메모 = f"환급 {환급액:,}원"
         add("환급", "환급율",
-            "기납부세액", pre_val, "결정세액", 결정세액,
+            "[신고서] 기납부세액(32번)", pre_val, "[신고서] 결정세액(28번)", 결정세액,
             상태, 메모=f"{메모} | 환급율 {환급율:.1f}%",
             diff=환급액 if 환급율 >= 0 else -abs(환급액))
 
@@ -560,8 +572,8 @@ def cross_verify(
         카드율 = 카드_합계 / rev_신고 * 100
         경비율 = 필요경비 / rev_신고 * 100
         add("경비분석", "카드경비 / 필요경비",
-            f"카드합계({len(카드_목록)}개사)", 카드_합계,
-            "필요경비(신고)", 필요경비,
+            f"[카드] 합계({len(카드_목록)}개사)", 카드_합계,
+            "[신고서] 필요경비(⑩)", 필요경비,
             "pass" if 카드_합계 <= 필요경비 else "warn",
             메모=f"카드 {카드율:.1f}% / 경비율 {경비율:.1f}%")
 
@@ -578,8 +590,8 @@ def cross_verify(
         if rev_전 and rev_당:
             변동율 = (rev_당 - rev_전) / rev_전 * 100
             add("전기당기", f"수입금액 증감 ({전기신고서.get('귀속연도')}→{당기신고서.get('귀속연도')})",
-                f"{전기신고서.get('귀속연도')}년", rev_전,
-                f"{당기신고서.get('귀속연도')}년", rev_당,
+                f"[신고서] {전기신고서.get('귀속연도')}년 수입", rev_전,
+                f"[신고서] {당기신고서.get('귀속연도')}년 수입", rev_당,
                 "warn" if abs(변동율) >= 30 else "pass",
                 메모=f"{변동율:+.1f}%  {'⚠ 30% 이상 변동' if abs(변동율) >= 30 else ''}",
                 diff=rev_당 - rev_전)
@@ -590,8 +602,8 @@ def cross_verify(
             소득률_당 = inc_당 / rev_당 * 100
             변동 = 소득률_당 - 소득률_전
             add("전기당기", "소득률 변동",
-                f"전기 소득률", round(소득률_전, 2),
-                f"당기 소득률", round(소득률_당, 2),
+                f"[신고서] {전기신고서.get('귀속연도')}년 소득률", round(소득률_전, 2),
+                f"[신고서] {당기신고서.get('귀속연도')}년 소득률", round(소득률_당, 2),
                 "warn" if abs(변동) >= 5 else "pass",
                 메모=f"변동 {변동:+.2f}%p  {'⚠ 5%p 초과' if abs(변동) >= 5 else ''}",
                 diff=round(변동, 2))
@@ -602,8 +614,8 @@ def cross_verify(
             경비율_당 = exp_당 / rev_당 * 100
             변동 = 경비율_당 - 경비율_전
             add("전기당기", "경비율 변동",
-                "전기 경비율", round(경비율_전, 2),
-                "당기 경비율", round(경비율_당, 2),
+                f"[신고서] {전기신고서.get('귀속연도')}년 경비율", round(경비율_전, 2),
+                f"[신고서] {당기신고서.get('귀속연도')}년 경비율", round(경비율_당, 2),
                 "warn" if abs(변동) >= 5 else "pass",
                 메모=f"변동 {변동:+.2f}%p  {'⚠ 5%p 초과' if abs(변동) >= 5 else ''}",
                 diff=round(변동, 2))
@@ -675,6 +687,27 @@ def _fmt(v) -> str:
     return str(v)
 
 
+def _fmt_label(lbl: str) -> str:
+    """[문서명] 태그를 색상 뱃지 + 항목명으로 변환 (HTML 안전)"""
+    if not lbl:
+        return ""
+    badge_map = {
+        "[신고서]":    ("신고서",    "#dbeafe", "#1d4ed8"),
+        "[안내문]":    ("안내문",    "#f3e5f5", "#6a1b9a"),
+        "[지급명세서]": ("지급명세서","#dcfce7", "#15803d"),
+        "[카드]":      ("카드",      "#fef9c3", "#a16207"),
+        "[계산]":      ("계산",      "#ffedd5", "#c2410c"),
+    }
+    for tag, (text, bg, fg) in badge_map.items():
+        if lbl.startswith(tag):
+            badge = (f'<span style="display:inline-block;padding:1px 6px;'
+                     f'border-radius:3px;font-size:10px;font-weight:bold;'
+                     f'background:{bg};color:{fg};margin-right:4px">{text}</span>')
+            rest = lbl[len(tag):].strip()
+            return badge + rest
+    return lbl
+
+
 def generate_html(
     name: str,
     jumin6: str,
@@ -732,9 +765,9 @@ def generate_html(
 <tr class="{cls}">
   <td class="status">{status_icon(r['상태'])}</td>
   <td>{r['항목']}</td>
-  <td>{r['값1_label']}</td>
+  <td>{_fmt_label(r['값1_label'])}</td>
   <td class="num">{_fmt(r['값1'])}</td>
-  <td>{r['값2_label']}</td>
+  <td>{_fmt_label(r['값2_label'])}</td>
   <td class="num">{_fmt(r['값2'])}</td>
   <td class="num" style="color:{'red' if r['차이'] and r['차이']!=0 and not isinstance(r['차이'],float) else '#555'}">{diff_str}</td>
   <td style="color:#666">{r.get('메모','')}</td>
