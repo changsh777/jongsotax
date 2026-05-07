@@ -229,50 +229,50 @@ def _sheet_to_pdf_sync(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
 
 def _sheet_to_pdf_libreoffice(xls_path: Path, sheet_name: str, pdf_path: Path) -> bool:
     """LibreOffice로 특정 시트 → PDF (macOS용, Excel 불필요)
-    전략: 원본 그대로 전체 변환 → 해당 시트 인덱스 페이지 추출
-    (시트 삭제 방식은 Named Range 깨짐 → #NAME? 오류 발생)
+    전략: 임시 복사본에서 타겟 외 시트를 veryHidden 처리 → LibreOffice 변환
+    - 삭제 방식(구): Named Range 깨짐 → #NAME? 오류
+    - 페이지 추출 방식(구): 시트별 페이지 수 달라 인덱스 오류
+    - veryHidden 방식(현): 시트 존재 유지(Named Range 보존) + 숨겨진 시트는 PDF 미포함
     """
     import subprocess, shutil as _sh, unicodedata as _ud
     try:
-        import openpyxl, PyPDF2
+        import openpyxl
 
-        # 1. 시트 인덱스 파악 (NFC 정규화)
-        wb = openpyxl.load_workbook(str(xls_path), read_only=True)
-        nfc_names = [_ud.normalize("NFC", s) for s in wb.sheetnames]
-        nfc_target = _ud.normalize("NFC", sheet_name)
-        wb.close()
-        if nfc_target not in nfc_names:
-            logger.warning("[패키지] 시트 '%s' 없음 (목록: %s)", sheet_name, nfc_names)
-            return False
-        sheet_idx = nfc_names.index(nfc_target)
-
-        # 2. 전체 xlsx → PDF (원본 그대로 — Named Range 보존)
+        # 1. 원본 복사
         tmp_dir = Path(tempfile.mkdtemp(prefix="lo_pdf_"))
+        tmp_xlsx = tmp_dir / xls_path.name
+        _sh.copy2(str(xls_path), str(tmp_xlsx))
+
+        # 2. 타겟 외 시트 veryHidden 처리 (삭제 X → Named Range 보존)
+        wb = openpyxl.load_workbook(str(tmp_xlsx))
+        nfc_target = _ud.normalize("NFC", sheet_name)
+        found = False
+        for ws in wb.worksheets:
+            if _ud.normalize("NFC", ws.title) == nfc_target:
+                ws.sheet_state = "visible"
+                found = True
+            else:
+                ws.sheet_state = "veryHidden"
+        if not found:
+            logger.warning("[패키지] 시트 '%s' 없음 (목록: %s)", sheet_name, wb.sheetnames)
+            _sh.rmtree(tmp_dir, ignore_errors=True)
+            return False
+        wb.save(str(tmp_xlsx))
+        wb.close()
+
+        # 3. LibreOffice 변환 (veryHidden 시트는 PDF에 포함 안 됨)
         result = subprocess.run(
             ["libreoffice", "--headless", "--convert-to", "pdf",
-             "--outdir", str(tmp_dir), str(xls_path)],
+             "--outdir", str(tmp_dir), str(tmp_xlsx)],
             capture_output=True, timeout=90, text=True
         )
-        tmp_pdf = tmp_dir / (xls_path.stem + ".pdf")
+        tmp_pdf = tmp_dir / (tmp_xlsx.stem + ".pdf")
         if not tmp_pdf.exists():
             logger.warning("[패키지] LibreOffice 변환 실패 (stderr: %s)", result.stderr[:300])
             _sh.rmtree(tmp_dir, ignore_errors=True)
             return False
 
-        # 3. 해당 시트 페이지 추출 (시트 1개 = PDF 1페이지 가정)
-        reader = PyPDF2.PdfReader(str(tmp_pdf))
-        total = len(reader.pages)
-        logger.info("[패키지] 전체 변환 %d페이지, 시트 '%s' 인덱스=%d", total, sheet_name, sheet_idx)
-
-        if sheet_idx >= total:
-            logger.warning("[패키지] 페이지 수(%d) < 시트 인덱스(%d) — 마지막 페이지 사용", total, sheet_idx)
-            sheet_idx = total - 1
-
-        writer = PyPDF2.PdfWriter()
-        writer.add_page(reader.pages[sheet_idx])
-        with open(pdf_path, "wb") as f:
-            writer.write(f)
-
+        _sh.move(str(tmp_pdf), str(pdf_path))
         _sh.rmtree(tmp_dir, ignore_errors=True)
         return True
     except Exception as e:
