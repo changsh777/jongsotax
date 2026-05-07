@@ -231,12 +231,13 @@ def _sheet_to_pdf_libreoffice(xls_path: Path, sheet_name: str, pdf_path: Path) -
     """LibreOffice로 특정 시트 → PDF (macOS용, Excel 불필요)"""
     import subprocess, shutil as _sh
     try:
-        import openpyxl
+        import openpyxl, unicodedata as _ud
         # 원본 복사 → 해당 시트만 남기고 임시 xlsx 저장
         tmp_xlsx = Path(tempfile.mktemp(suffix=".xlsx"))
         _sh.copy2(str(xls_path), str(tmp_xlsx))
         wb = openpyxl.load_workbook(str(tmp_xlsx))
-        for sn in [s for s in wb.sheetnames if s != sheet_name]:
+        nfc_target = _ud.normalize("NFC", sheet_name)
+        for sn in [s for s in wb.sheetnames if _ud.normalize("NFC", s) != nfc_target]:
             del wb[sn]
         wb.save(str(tmp_xlsx))
 
@@ -322,11 +323,12 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
         if _is_mac:
             # ── macOS: LibreOffice ──────────────────────────────
             try:
-                import openpyxl
+                import openpyxl, unicodedata as _ud
                 wb_tmp = openpyxl.load_workbook(str(xls_path), read_only=True, data_only=True)
-                sheet_names = wb_tmp.sheetnames
+                # NFD→NFC 정규화 (macOS SMB 파일명 대응)
+                sheet_names = [_ud.normalize("NFC", s) for s in wb_tmp.sheetnames]
                 wb_tmp.close()
-                logger.info("[패키지] 시트 목록: %s", sheet_names)
+                logger.info("[패키지] 시트 목록(NFC): %s", sheet_names)
 
                 workpan = next((s for s in sheet_names if s in WORKPAN_SHEETS), None)
                 if workpan:
