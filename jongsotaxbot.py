@@ -265,6 +265,7 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
       2. 소득시트   (작업결과_이름.xls WORKPAN_SHEETS 시트 → PDF)
       3. 작업준비시트 (작업결과_이름.xls 작업준비_* 시트 → PDF)
       4. 안내문 1페이지
+      5. 신고서.pdf (당기)
       → 합쳐서 출력패키지_{이름}_{날짜}.pdf 저장 후 경로 반환
     """
     ts     = datetime.now().strftime("%Y%m%d_%H%M")
@@ -281,36 +282,57 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
             logger.warning("[패키지] 검증보고서 PDF 실패 — 스킵")
 
         # ─ 2. 작업결과 엑셀 시트 → PDF ──────────────────────────
+        # xlwings 앱을 한 번만 열고 모든 시트 변환 후 종료
+        # (시트마다 앱을 재시작하면 macOS 데몬 환경에서 실패 위험)
         try:
             import xlwings as xw
-            _app = xw.App(visible=False)
+            _app = xw.App(visible=False, add_book=False)
             _app.display_alerts = False
-            _wb  = _app.books.open(str(xls_path))
-            sheet_names = [s.name for s in _wb.sheets]
-            _wb.close()
-            _app.quit()
-            logger.info("[패키지] 시트 목록: %s", sheet_names)
+            try:
+                _wb = _app.books.open(str(xls_path))
+                sheet_names = [s.name for s in _wb.sheets]
+                logger.info("[패키지] 시트 목록: %s", sheet_names)
 
-            # 소득시트 (프리/복식 작업판)
-            workpan = next((s for s in sheet_names if s in WORKPAN_SHEETS), None)
-            if workpan:
-                pdf_wp = tmpdir / "02_소득시트.pdf"
-                if _sheet_to_pdf_sync(xls_path, workpan, pdf_wp):
-                    pdf_parts.append(pdf_wp)
-                    logger.info("[패키지] 소득시트 '%s' PDF 완료", workpan)
-            else:
-                logger.warning("[패키지] 소득시트 없음 (시트 목록: %s)", sheet_names)
+                # 소득시트 (프리/복식 작업판 — 직원 입력값 있는 시트)
+                workpan = next((s for s in sheet_names if s in WORKPAN_SHEETS), None)
+                if workpan:
+                    pdf_wp = tmpdir / "02_소득시트.pdf"
+                    try:
+                        _wb.sheets[workpan].api.ExportAsFixedFormat(
+                            Type=0, Filename=str(pdf_wp),
+                            Quality=0, IncludeDocProperties=True,
+                            IgnorePrintAreas=False, OpenAfterPublish=False,
+                        )
+                        pdf_parts.append(pdf_wp)
+                        logger.info("[패키지] 소득시트 '%s' PDF 완료", workpan)
+                    except Exception as e:
+                        logger.warning("[패키지] 소득시트 '%s' PDF 실패: %s", workpan, e)
+                else:
+                    logger.warning("[패키지] 소득시트 없음 (시트 목록: %s)", sheet_names)
 
-            # 작업준비 시트
-            junbi = next((s for s in sheet_names if s.startswith("작업준비_")), None)
-            if junbi:
-                pdf_jj = tmpdir / "03_작업준비.pdf"
-                if _sheet_to_pdf_sync(xls_path, junbi, pdf_jj):
-                    pdf_parts.append(pdf_jj)
-                    logger.info("[패키지] 작업준비 '%s' PDF 완료", junbi)
+                # 작업준비 시트
+                junbi = next((s for s in sheet_names if s.startswith("작업준비_")), None)
+                if junbi:
+                    pdf_jj = tmpdir / "03_작업준비.pdf"
+                    try:
+                        _wb.sheets[junbi].api.ExportAsFixedFormat(
+                            Type=0, Filename=str(pdf_jj),
+                            Quality=0, IncludeDocProperties=True,
+                            IgnorePrintAreas=False, OpenAfterPublish=False,
+                        )
+                        pdf_parts.append(pdf_jj)
+                        logger.info("[패키지] 작업준비 '%s' PDF 완료", junbi)
+                    except Exception as e:
+                        logger.warning("[패키지] 작업준비 '%s' PDF 실패: %s", junbi, e)
+
+            finally:
+                try: _wb.close()
+                except Exception: pass
+                try: _app.quit()
+                except Exception: pass
 
         except ImportError:
-            logger.warning("[패키지] xlwings 없음 — Excel 시트 PDF 스킵")
+            logger.warning("[패키지] xlwings 없음 — Excel 시트 PDF 스킵 (Excel 설치 필요)")
         except Exception as e:
             logger.warning("[패키지] Excel PDF 처리 실패: %s", e)
 
@@ -322,6 +344,18 @@ def _make_print_package_sync(folder: Path, name: str, html_path: Path, xls_path:
             if _extract_first_page_sync(ann_files[0], pdf_ann):
                 pdf_parts.append(pdf_ann)
                 logger.info("[패키지] 안내문 1페이지 완료")
+
+        # ─ 4. 신고서.pdf (당기) ─────────────────────────────────
+        singoser = folder / "신고서.pdf"
+        if singoser.exists():
+            pdf_sg = tmpdir / "05_신고서.pdf"
+            try:
+                import shutil as _sh
+                _sh.copy2(str(singoser), str(pdf_sg))
+                pdf_parts.append(pdf_sg)
+                logger.info("[패키지] 신고서 추가 완료")
+            except Exception as e:
+                logger.warning("[패키지] 신고서 복사 실패: %s", e)
 
         # ─ 4. 합치기 ────────────────────────────────────────────
         if not pdf_parts:
