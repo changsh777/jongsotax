@@ -36,8 +36,19 @@ def _nfc(s: str) -> str:
 #   패턴: 문자열이면 glob, callable이면 함수(folder, name) → Path|None
 
 def _glob_first(folder: Path, pattern: str) -> Path | None:
-    hits = sorted(folder.glob(pattern))
-    return hits[0] if hits else None
+    """NFC/NFD 양쪽 정규화 후 fnmatch — macOS SMB 마운트 대응"""
+    import fnmatch as _fnmatch
+    nfc_pat = unicodedata.normalize("NFC", pattern)
+    try:
+        hits = sorted(
+            f for f in folder.iterdir()
+            if f.is_file() and _fnmatch.fnmatch(
+                unicodedata.normalize("NFC", f.name), nfc_pat
+            )
+        )
+        return hits[0] if hits else None
+    except Exception:
+        return None
 
 def _subdir_count(folder: Path, subdir: str):
     d = folder / subdir

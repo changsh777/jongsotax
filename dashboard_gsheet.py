@@ -47,11 +47,36 @@ SHEET_NAME     = "현황대시보드"
 # 중요도: "high" = 없으면 빨강, "mid" = 없으면 주황, "low" = 없으면 흰색
 
 def _g(folder, pattern):
-    hits = sorted(folder.glob(pattern))
-    return hits[0] if hits else None
+    """NFC/NFD 양쪽 정규화 후 fnmatch — macOS SMB 마운트 대응"""
+    nfc_pat = unicodedata.normalize("NFC", pattern)
+    nfd_pat  = unicodedata.normalize("NFD", pattern)
+    try:
+        hits = sorted(
+            f for f in folder.iterdir()
+            if f.is_file() and (
+                unicodedata.normalize("NFC", f.name) == nfc_pat
+                or unicodedata.normalize("NFD", f.name) == nfd_pat
+                or __import__("fnmatch").fnmatch(
+                    unicodedata.normalize("NFC", f.name), nfc_pat)
+            )
+        )
+        return hits[0] if hits else None
+    except Exception:
+        return None
 
 def _subfile(folder, subdir):
-    d = folder / subdir
+    nfc_sub = unicodedata.normalize("NFC", subdir)
+    # 서브디렉토리도 NFC/NFD 양방향 탐색
+    d = None
+    try:
+        for item in folder.iterdir():
+            if item.is_dir() and unicodedata.normalize("NFC", item.name) == nfc_sub:
+                d = item
+                break
+    except Exception:
+        pass
+    if d is None:
+        d = folder / subdir
     if not d.is_dir():
         return None
     files = [f for f in d.iterdir() if f.is_file()]
