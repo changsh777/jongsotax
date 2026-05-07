@@ -1,7 +1,7 @@
 """
 auto_parse.py - 구글시트 접수명단 감시 → 신규 미처리 건 자동 파싱 (Mac Mini 크론)
 
-크론: */2 * * * * /usr/bin/python3 ~/종소세2026/auto_parse.py >> ~/auto_parse.log 2>&1
+크론: */5 * * * * /usr/bin/python3 ~/종소세2026/auto_parse.py >> ~/auto_parse.log 2>&1
 
 동작:
   - 구글시트 신규 고객 중 처음 감지된 건만 처리 (중복 알림 없음)
