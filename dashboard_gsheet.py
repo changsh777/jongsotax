@@ -147,16 +147,21 @@ def _nfc(s):
     return unicodedata.normalize("NFC", s)
 
 def _fmt(path):
+    """파일 수정일 표시:
+    - 작년 이전  → ✓  (전기신고서 등 이전 시즌 파일)
+    - 올해 이번달 → N일  (예: 7일)
+    - 올해 다른달 → M/D  (예: 4/16)
+    """
     if path is None:
         return ""
     try:
-        from datetime import date as _date
-        dt = datetime.fromtimestamp(path.stat().st_mtime)
+        dt    = datetime.fromtimestamp(path.stat().st_mtime)
         today = datetime.today()
-        if dt.month == today.month and dt.year == today.year:
-            return f"{dt.day}일"       # 이번 달: "7일"
-        else:
-            return f"{dt.month}/{dt.day}"  # 다른 달: "4/16"
+        if dt.year < today.year:
+            return "✓"                        # 작년 이전 파일 → 체크만
+        if dt.month == today.month:
+            return f"{dt.day}일"              # 이번달: "7일"
+        return f"{dt.month}/{dt.day}"         # 올해 다른달: "4/16"
     except Exception:
         return "✓"
 
