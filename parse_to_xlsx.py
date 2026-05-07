@@ -157,20 +157,24 @@ def parse_anneam(pdf_path):
     out["기장의무"] = first_match(r"기장의무\s+([^\n]+?)\s+추계시", all_text)
     out["추계시적용경비율"] = first_match(r"추계시적용경비율\s+(\S+)", all_text)
 
-    # 수입금액 총계: 1페이지의 "총계" 라인 + 다음 라인까지 숫자 모두 추출
-    # (큰 숫자가 줄바꿈으로 쪼개지는 케이스 대응)
+    # 수입금액 총계: 1페이지의 "총계" 라인 + 이후 줄까지 숫자 이어붙이기
+    # 큰 숫자(1억↑)는 PDF 셀 너비 초과로 여러 줄로 쪼개짐 → 최대 4줄 룩어헤드
     lines = page1_text.split("\n")
     income_total = ""
     for i, line in enumerate(lines):
-        if line.strip().startswith("총계"):
-            combined = line.replace("총계", "")
-            if i + 1 < len(lines):
-                combined += " " + lines[i + 1]
-            # 첫 숫자 시퀀스만 추출 (다음 단어/한글 만나면 멈춤)
-            m = re.match(r"\s*([\d,\s]+)", combined)
+        if re.match(r"^\s*총\s?계", line):
+            combined = re.sub(r"^\s*총\s?계", "", line)
+            for j in range(1, 5):                        # 최대 4줄 더 확인
+                if i + j >= len(lines):
+                    break
+                nxt = lines[i + j].strip()
+                if re.match(r"^[\d,]+$", nxt):           # 숫자/콤마만 → 이어붙이기
+                    combined += nxt
+                else:
+                    break
+            m = re.search(r"[\d,]+", combined)
             if m:
-                digits = re.sub(r"[^\d]", "", m.group(1))
-                income_total = digits
+                income_total = re.sub(r"[^\d]", "", m.group())
             break
     out["수입금액총계"] = int(income_total) if income_total else ""
 
