@@ -4,6 +4,7 @@
 - 이후 자동 갱신
 - 시트에 행 단위로 누적 (덮어쓰지 않음, 동일 성명 행은 갱신)
 """
+import platform
 import gspread
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -16,7 +17,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-CRED_DIR = Path(r"F:\종소세2026\.credentials")
+if platform.system() == "Darwin":
+    CRED_DIR = Path.home() / "종소세2026" / ".credentials"
+else:
+    CRED_DIR = Path(r"F:\종소세2026\.credentials")
+
 CLIENT_SECRET = CRED_DIR / "client_secret.json"
 TOKEN_FILE = CRED_DIR / "token.pickle"
 
