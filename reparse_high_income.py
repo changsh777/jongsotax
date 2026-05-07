@@ -27,6 +27,7 @@ from config import CUSTOMER_DIR, PARSE_RESULT_XLSX
 from parse_to_xlsx import parse_anneam, COLUMNS
 from fee_calculator import calculate_fee, count_other_income
 from gsheet_writer import get_credentials
+from jakupan_gen import make_jakupan
 
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 FORCE_NAMES    = ["김지혁"]   # 금액과 무관하게 강제 재처리할 고객
@@ -182,6 +183,27 @@ def main():
     print(f"\n=== 완료: 변경 {len(changed)}명 ===")
     if changed:
         print("변경된 고객:", ", ".join(changed))
+
+    # ── 5) 변경된 고객 작업판 재생성 ─────────────────────
+    if changed:
+        print(f"\n작업판 재생성 ({len(changed)}명)...")
+        for name in changed:
+            # jumin6: 폴더명에서 추출
+            jumin6 = ""
+            nfc = _nfc(name)
+            for folder in CUSTOMER_DIR.iterdir():
+                if folder.is_dir() and _nfc(folder.name).startswith(f"{nfc}_"):
+                    parts = _nfc(folder.name).split("_")
+                    jumin6 = parts[1] if len(parts) > 1 else ""
+                    break
+            try:
+                result = make_jakupan(name, jumin6)
+                if result:
+                    print(f"  [{name}] 작업판 재생성 완료")
+                else:
+                    print(f"  [{name}] 작업판 생성 실패")
+            except Exception as e:
+                print(f"  [{name}] 작업판 오류: {e}")
 
 
 if __name__ == "__main__":
