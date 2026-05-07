@@ -245,13 +245,28 @@ def make_package(name: str, jumin6: str = "") -> Path | None:
         else:
             print(f"\n  [4] 안내문 PDF 없음")
 
-        # ── 5. 합치기 ─────────────────────────────────────────────
+        # ── 5. 신고서 PDF (당기) ──────────────────────────────────
+        singoser = folder / "신고서.pdf"
+        if singoser.exists():
+            pdf_sg = tmpdir / "05_신고서.pdf"
+            print(f"\n  [5] 신고서: {singoser.name}")
+            try:
+                import shutil as _sh
+                _sh.copy2(str(singoser), str(pdf_sg))
+                pdf_parts.append(pdf_sg)
+                print(f"      → 추가 완료")
+            except Exception as e:
+                print(f"      → 복사 실패: {e}")
+        else:
+            print(f"\n  [5] 신고서.pdf 없음 — 스킵")
+
+        # ── 6. 합치기 ─────────────────────────────────────────────
         if not pdf_parts:
             print(f"\n  [오류] 합칠 PDF가 없습니다.")
             return None
 
         out_path = folder / f"출력패키지_{name}_{ts}.pdf"
-        print(f"\n  [5] PDF 합치기 ({len(pdf_parts)}개)")
+        print(f"\n  [6] PDF 합치기 ({len(pdf_parts)}개)")
         for i, p in enumerate(pdf_parts, 1):
             print(f"      {i}. {p.name}")
 
