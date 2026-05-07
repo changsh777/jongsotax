@@ -1102,6 +1102,18 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
         지급명세서, 카드_목록, results,
     )
     ts = datetime.now().strftime("%Y%m%d_%H%M")
+
+    # 기존 검증보고서 → _archive 이동 (타임스탬프 파일명 그대로 보존)
+    old_reports = nfc_glob(folder, "검증보고서_*.html")
+    if old_reports:
+        arch = folder / "_archive"
+        arch.mkdir(exist_ok=True)
+        for old in old_reports:
+            try:
+                old.rename(arch / old.name)
+            except Exception:
+                pass
+
     out_path = folder / f"검증보고서_{ts}.html"
     out_path.write_text(html, encoding="utf-8")
     print(f"    ✅ {out_path.name}")

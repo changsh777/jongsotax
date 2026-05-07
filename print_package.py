@@ -260,13 +260,25 @@ def make_package(name: str, jumin6: str = "") -> Path | None:
         else:
             print(f"\n  [5] 신고서.pdf 없음 — 스킵")
 
-        # ── 6. 합치기 ─────────────────────────────────────────────
+        # ── 6. 기존 출력패키지 → _archive 이동 ────────────────────
+        old_pkgs = nfc_glob(folder, "출력패키지_*.pdf")
+        if old_pkgs:
+            arch = folder / "_archive"
+            arch.mkdir(exist_ok=True)
+            for op in old_pkgs:
+                try:
+                    op.rename(arch / op.name)
+                    print(f"\n  [archive] {op.name} → _archive/")
+                except Exception as e:
+                    print(f"\n  [archive 실패] {op.name}: {e}")
+
+        # ── 7. 합치기 ─────────────────────────────────────────────
         if not pdf_parts:
             print(f"\n  [오류] 합칠 PDF가 없습니다.")
             return None
 
         out_path = folder / f"출력패키지_{name}_{ts}.pdf"
-        print(f"\n  [6] PDF 합치기 ({len(pdf_parts)}개)")
+        print(f"\n  [7] PDF 합치기 ({len(pdf_parts)}개)")
         for i, p in enumerate(pdf_parts, 1):
             print(f"      {i}. {p.name}")
 
