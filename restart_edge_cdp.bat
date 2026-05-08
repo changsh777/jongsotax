@@ -12,6 +12,7 @@ start "" "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" ^
     --remote-debugging-port=9222 ^
     --remote-allow-origins=* ^
     --disable-popup-blocking ^
+    --user-data-dir="C:\EdgeDebug" ^
     "https://hometax.go.kr"
 
 echo Edge 재시작 완료!

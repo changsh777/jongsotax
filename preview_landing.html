@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>신고결과 미리보기</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif;
+    background: #f0f0f0;
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+  }
+  .phone {
+    width: 375px;
+    background: #f5f5f5;
+    min-height: 700px;
+    border-radius: 40px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    overflow: hidden;
+    border: 10px solid #222;
+  }
+  .status-bar {
+    background: white;
+    padding: 12px 20px 8px;
+    font-size: 12px;
+    color: #333;
+    display: flex;
+    justify-content: space-between;
+  }
+  .content { padding: 20px 16px; }
+  .header {
+    background: white;
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  }
+  .brand { font-size: 12px; color: #9ca3af; margin-bottom: 10px; }
+  .title { font-size: 17px; font-weight: 700; color: #111; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #6b7280; margin-top: 6px; }
+
+  .card {
+    background: white;
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  }
+  .card-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #9ca3af;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+  }
+  .doc-title { font-size: 15px; font-weight: 600; color: #111827; margin-bottom: 14px; }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+  }
+  .btn-blue  { background: #2563eb; color: white; }
+  .btn-gray  { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
+  .btn-green { background: #059669; color: white; }
+
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 2px 0 12px;
+  }
+  .divider-line { flex: 1; height: 1px; background: #e5e7eb; }
+  .divider-text { font-size: 12px; color: #9ca3af; white-space: nowrap; }
+
+  .next-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px;
+    font-size: 13px;
+    color: #6b7280;
+    background: none;
+    border: none;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 8px;
+  }
+  .footer {
+    text-align: center;
+    font-size: 11px;
+    color: #9ca3af;
+    padding: 8px 0 24px;
+  }
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="status-bar">
+    <span>9:41</span>
+    <span>●●●</span>
+  </div>
+
+  <div class="content">
+
+    <div class="header">
+      <div class="brand">세무회계창연</div>
+      <div class="title">2024년 종합소득세<br>신고 완료</div>
+      <div class="sub">홍길동님의 신고가 완료되었습니다.</div>
+    </div>
+
+    <!-- 1. 접수증 -->
+    <div class="card">
+      <div class="card-label">1 / 4</div>
+      <div class="doc-title">📄 접수증</div>
+      <a class="btn btn-blue" href="#">접수증 확인하기</a>
+      <button class="next-btn">다음 장 보기 ↓</button>
+    </div>
+
+    <div class="divider">
+      <div class="divider-line"></div>
+      <div class="divider-text">다음 서류</div>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- 2. 신고서 -->
+    <div class="card">
+      <div class="card-label">2 / 4</div>
+      <div class="doc-title">📋 신고서</div>
+      <a class="btn btn-blue" href="#">신고서 확인하기</a>
+      <button class="next-btn">다음 장 보기 ↓</button>
+    </div>
+
+    <div class="divider">
+      <div class="divider-line"></div>
+      <div class="divider-text">다음 서류</div>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- 3. 종합소득세 납부서 (있을 때만 표시) -->
+    <div class="card">
+      <div class="card-label">3 / 4</div>
+      <div class="doc-title">💳 종합소득세 납부서</div>
+      <a class="btn btn-gray" href="#">납부서 확인하기</a>
+      <button class="next-btn">다음 장 보기 ↓</button>
+    </div>
+
+    <div class="divider">
+      <div class="divider-line"></div>
+      <div class="divider-text">다음 서류</div>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- 4. 지방세 납부서 (있을 때만 표시) -->
+    <div class="card">
+      <div class="card-label">4 / 4</div>
+      <div class="doc-title">🏛 지방세 납부서</div>
+      <a class="btn btn-gray" href="#">납부서 확인하기</a>
+    </div>
+
+    <div class="footer">세무회계창연</div>
+
+  </div>
+</div>
+</body>
+</html>
