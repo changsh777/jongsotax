@@ -12,17 +12,17 @@ hometax_result_scraper.py — 홈택스 신고결과(접수증·신고서·납�
     종합소득세 접수증 {이름}.pdf
     종합소득세 신고서 {이름}.pdf
     종합소득세 납부서 {이름}.pdf   (납부액 있을 때만)
-    지방소득세 납부서 {이름}.pdf   (지방세 납부액 있을 때만)
 
 구현 방식:
     Playwright connect_over_cdp 대신 순수 websockets CDP 사용
     (Edge 147 + Playwright 1.59 Browser-level 연결 타임아웃 우회)
 
-컬럼 인덱스 (40컬럼 기준, 2026-05-07 실측):
+컬럼 인덱스 (40컬럼 기준, 2026-05-08 실측 + 사용자 검수):
     [0]=체크 [1]=요약 [2]=과세연월 [3]=신고서종류 [4]=신고구분
     [5]=신고유형 [6]=성명 [7]=주민번호 [8]=접수방법 [9]=접수일시
-    [10]=접수번호(링크) [11]=접수서류 [12]=접수증보기(빨강버튼)
-    [13]=두번째보기 [14..36]=히든데이터 [37]=납부서이동 [38]=- [39]=지방세이동
+    [10]=접수번호(신고서보기 A링크) [11]=접수서류
+    [12]=접수증보기(빨강버튼) [13]=납부서보기(두번째버튼)
+    [14..36]=히든데이터 [37]=지방소득세이동(위택스,절대클릭금지) [38-39]=기타
 """
 
 import sys, io, os, time, json, asyncio, unicodedata, logging, requests
@@ -53,12 +53,13 @@ START_DATE  = "20260501"
 CDP_PORT    = 9222
 
 # 컬럼 인덱스 (40컬럼 실측)
-COL_NAME    = 6     # 성명
-COL_JUMIN   = 7     # 주민번호
-COL_APPNO   = 10    # 접수번호(신고서 뷰어 링크)
-COL_RECEIPT = 12    # 접수증 보기 (빨강버튼)
-COL_TAX     = 37    # 납부서 이동
-COL_LOCAL   = 39    # 지방세 납부서 이동
+COL_NAME      = 6   # 성명
+COL_JUMIN     = 7   # 주민번호
+COL_SHINGOSER = 10  # 신고서 보기 — 접수번호란 링크(A태그) 클릭
+COL_RECEIPT   = 12  # 접수증 보기 버튼 (빨강/보기)
+COL_TAX       = 13  # 납부서 보기 버튼 (두번째 보기)
+# col[37]      = 지방소득세 이동 → 위택스 이동, 절대 클릭 금지
+# COL_LOCAL   = 37  # 지방세 이동 → 위택스 별도 모듈 필요, 미구현
 
 # 신고내역 팝업 건수 select ID
 SELECT_ROWNUM = "mf_txppWframe_UTERNAAZ0Z31_wframe_edtGrdRowNum"
@@ -132,10 +133,10 @@ def _get_all_tab_ids():
     return {t["id"] for t in requests.get(f"http://localhost:{CDP_PORT}/json").json()}
 
 
-def _get_new_tab(known_ids: set, timeout_s: int = 30):
-    """known_ids 이후 생성된 새 탭 반환 (폴링)"""
+async def _get_new_tab(known_ids: set, timeout_s: int = 30):
+    """known_ids 이후 생성된 새 탭 반환 (async 폴링 — 이벤트루프 블로킹 방지)"""
     for _ in range(timeout_s * 2):
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
         tabs = requests.get(f"http://localhost:{CDP_PORT}/json").json()
         for t in tabs:
             if t["id"] not in known_ids and "devtools" not in t.get("url", ""):
@@ -143,24 +144,96 @@ def _get_new_tab(known_ids: set, timeout_s: int = 30):
     return None
 
 
+async def _dismiss_dialog_if_any(ws):
+    """열려있는 JS 다이얼로그(alert/confirm)를 CDP로 즉시 닫기.
+    Runtime.evaluate는 dialog 중 차단되므로 직접 WS 명령 사용.
+    """
+    # Page.enable 먼저 (이미 활성화돼 있어도 무해)
+    await ws.send(json.dumps({"id": 990, "method": "Page.enable", "params": {}}))
+    try:
+        while True:
+            r = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+            if r.get("id") == 990:
+                break
+    except asyncio.TimeoutError:
+        pass
+
+    # dialog 닫기 (없으면 error 반환 — 무시)
+    await ws.send(json.dumps({"id": 991, "method": "Page.handleJavaScriptDialog",
+                               "params": {"accept": True}}))
+    try:
+        while True:
+            r = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+            if r.get("id") == 991:
+                if "error" not in r:
+                    logger.info("JS 다이얼로그 처리 완료 (accept)")
+                else:
+                    logger.debug("JS 다이얼로그 없음 (정상)")
+                break
+    except asyncio.TimeoutError:
+        pass
+    await asyncio.sleep(0.3)
+
+
+async def _close_popup_with_retry(ws, name: str, label: str, max_attempts: int = 14):
+    """버튼 클릭 후 나타나는 개인지방세 안내 팝업 반복 닫기
+    - 0.5초 간격, 최대 14회(7초) 시도
+    - '확인' 버튼 우선, 없으면 '닫기'
+    """
+    for attempt in range(max_attempts):
+        await asyncio.sleep(0.5)
+        result = await _eval(ws, """(function(){
+    var candidates = Array.from(document.querySelectorAll('input[type=button], button'))
+        .filter(function(b){
+            if (!b.offsetParent) return false;
+            var r = b.getBoundingClientRect();
+            if (r.width < 5 || r.height < 5) return false;
+            var txt = (b.value || b.innerText || b.textContent || '').trim();
+            return txt === '확인' || txt === '닫기';
+        });
+    if (!candidates.length) return 'none';
+    // '닫기' 우선 — '확인'은 위택스 이동 위험이 있으므로 최후 수단
+    var btn = candidates.find(function(b){
+        return (b.value || b.innerText || '').trim() === '닫기';
+    }) || candidates.find(function(b){
+        return (b.value || b.innerText || '').trim() === '취소';
+    }) || candidates[0];  // 마지막에 확인 (확인만 있는 단순 알림 팝업용)
+    btn.click();
+    return 'closed:' + (btn.value || btn.innerText || '?').trim();
+})()""", cmd_id=200 + attempt)
+        if result and result != 'none':
+            logger.info("[%s] %s 팝업 닫기: %s (%d회 시도)", name, label, result, attempt + 1)
+            await asyncio.sleep(0.5)
+            return True
+    logger.info("[%s] %s 팝업 미감지 (없거나 이미 닫힘)", name, label)
+    return False
+
+
 async def _eval(ws, code: str, cmd_id: int = 99):
-    await ws.send(json.dumps({
-        "id": cmd_id, "method": "Runtime.evaluate",
-        "params": {"expression": code, "returnByValue": True, "awaitPromise": True}
-    }))
-    while True:
-        resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
-        if resp.get("id") == cmd_id:
-            r = resp.get("result", {}).get("result", {})
-            if r.get("type") == "string":
-                return r.get("value")
-            val = r.get("value")
-            if isinstance(val, str):
-                try:
-                    return json.loads(val)
-                except Exception:
-                    return val
-            return val
+    try:
+        await ws.send(json.dumps({
+            "id": cmd_id, "method": "Runtime.evaluate",
+            "params": {"expression": code, "returnByValue": True, "awaitPromise": True}
+        }))
+        while True:
+            resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
+            if resp.get("id") == cmd_id:
+                r = resp.get("result", {}).get("result", {})
+                if r.get("type") == "string":
+                    return r.get("value")
+                val = r.get("value")
+                if isinstance(val, str):
+                    try:
+                        return json.loads(val)
+                    except Exception:
+                        return val
+                return val
+    except asyncio.TimeoutError:
+        logger.warning("_eval timeout (cmd_id=%d) — WS 유휴 또는 응답 없음", cmd_id)
+        return None
+    except Exception as e:
+        logger.warning("_eval 오류: %s (cmd_id=%d)", e, cmd_id)
+        return None
 
 
 # ── ClipReport PDF 다운로드 ─────────────────────────────────────────────
@@ -188,18 +261,18 @@ async def _download_from_clipreport(tab: dict, dest: Path, name: str, label: str
             # 페이지 로딩 대기
             await asyncio.sleep(3)
 
-            # PDF 버튼 클릭
+            # 저장/PDF 버튼 클릭 (ClipReport 종류에 따라 클래스명 다름)
+            # 납부서·신고서: report_menu_save_button / 접수증: report_menu_pdf_button
             clicked = await _eval(ws, """(function() {
-    var btn = document.querySelector('.report_menu_pdf_button');
+    var btn = document.querySelector('.report_menu_save_button')
+           || document.querySelector('.report_menu_pdf_button');
     if (!btn) return 'no_btn';
-    btn.classList.remove('report_menu_pdf_button_svg_dis');
-    btn.classList.add('report_menu_pdf_button_svg');
     btn.disabled = false;
     btn.click();
-    return 'clicked';
+    return 'clicked:' + btn.className.split(' ').find(function(c){ return c.includes('save') || c.includes('pdf'); });
 })()""", cmd_id=3)
 
-            if clicked != "clicked":
+            if not clicked or "clicked" not in str(clicked):
                 logger.warning("[%s] %s PDF 버튼 없음 (%s)", name, label, clicked)
                 return False
 
@@ -258,19 +331,169 @@ async def _download_from_clipreport(tab: dict, dest: Path, name: str, label: str
         return False
 
 
-# ── 신고서: 접수번호 링크 → 일괄출력 → ClipReport ──────────────────────
+# ── Page.printToPDF 직접 추출 ─────────────────────────────────────────
+
+async def _print_tab_to_pdf(tab: dict, dest: Path, name: str, label: str) -> bool:
+    """ClipReport 탭 내용을 CDP Page.printToPDF 로 직접 PDF 저장.
+    저장 버튼 클릭 없이 CDP가 현재 탭을 통째로 PDF화 → 다운로드 이벤트 불필요.
+    """
+    ws_url = tab["webSocketDebuggerUrl"]
+    try:
+        async with websockets.connect(ws_url) as ws:
+            # ClipReport 내용 로딩 대기
+            # readyState 완료 + 뷰어 버튼 출현까지 최대 20초 폴링
+            for _ in range(40):
+                await asyncio.sleep(0.5)
+                ready = await _eval(ws, """(function(){
+    if (document.readyState !== 'complete') return 'loading';
+    // ClipReport 뷰어 버튼 존재 여부 확인
+    var btn = document.querySelector('.report_menu_save_button, .report_menu_pdf_button, #reportDiv, iframe');
+    return btn ? 'ready' : 'waiting';
+})()""", cmd_id=10)
+                if ready == "ready":
+                    logger.info("[%s] %s ClipReport 로딩 완료", name, label)
+                    break
+            else:
+                logger.warning("[%s] %s ClipReport 로딩 20초 초과 — 강제 진행", name, label)
+
+            # 추가 안정 대기 (뷰어 렌더링)
+            await asyncio.sleep(2)
+
+            # Page.printToPDF
+            await ws.send(json.dumps({
+                "id": 20, "method": "Page.printToPDF",
+                "params": {
+                    "printBackground": True,
+                    "preferCSSPageSize": True,
+                    "marginTop": 0.4,
+                    "marginBottom": 0.4,
+                    "marginLeft": 0.4,
+                    "marginRight": 0.4,
+                }
+            }))
+            resp = None
+            for _ in range(60):  # 최대 30초
+                raw = json.loads(await asyncio.wait_for(ws.recv(), timeout=35))
+                if raw.get("id") == 20:
+                    resp = raw
+                    break
+
+            if not resp:
+                logger.warning("[%s] %s printToPDF 응답 없음", name, label)
+                return False
+
+            import base64
+            data_b64 = resp.get("result", {}).get("data", "")
+            if not data_b64:
+                err = resp.get("error", {})
+                logger.warning("[%s] %s printToPDF 데이터 없음: %s", name, label, err)
+                return False
+
+            pdf_bytes = base64.b64decode(data_b64)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(pdf_bytes)
+            logger.info("[%s] %s printToPDF 저장: %s (%d bytes)", name, label, dest.name, len(pdf_bytes))
+            return True
+
+    except Exception as e:
+        logger.error("[%s] %s printToPDF 오류: %s", name, label, e)
+        return False
+
+
+# ── UTERNAAZ34 신고서 보기 팝업 → 일괄출력 → printToPDF ──────────────
+
+async def _handle_uternaaz34_to_pdf(tab: dict, dest: Path, name: str) -> bool:
+    """UTERNAAZ34 신고서 보기 팝업:
+    1) 일괄출력 버튼 클릭 → 전체 서식 미리보기 로딩
+    2) Page.printToPDF 로 직접 PDF 저장 (프린트 대화상자 우회)
+    """
+    ws_url = tab["webSocketDebuggerUrl"]
+    try:
+        async with websockets.connect(ws_url) as ws:
+            # 팝업 로딩 완료 대기
+            for _ in range(30):
+                await asyncio.sleep(0.5)
+                r = await _eval(ws, "document.readyState", cmd_id=10)
+                if r == "complete":
+                    break
+            await asyncio.sleep(1)
+
+            # "일괄출력" 버튼 클릭
+            r = await _eval(ws, """(function(){
+    var btn = Array.from(document.querySelectorAll('input[type=button],button,a'))
+        .find(function(b){
+            return (b.value||b.innerText||b.textContent||'').trim() === '일괄출력';
+        });
+    if (!btn) return 'no_btn';
+    btn.click();
+    return 'clicked:일괄출력';
+})()""", cmd_id=11)
+            logger.info("[%s] 신고서 일괄출력: %s", name, r)
+
+            # 전체 서식 미리보기 로딩 대기 (페이지 수 1 → N 변화, 보통 10~20초 소요)
+            await asyncio.sleep(20)
+
+            # Page.printToPDF
+            await ws.send(json.dumps({
+                "id": 20, "method": "Page.printToPDF",
+                "params": {
+                    "printBackground": True,
+                    "preferCSSPageSize": True,
+                    "marginTop": 0.4,
+                    "marginBottom": 0.4,
+                    "marginLeft": 0.4,
+                    "marginRight": 0.4,
+                }
+            }))
+            resp = None
+            for _ in range(120):  # 최대 60초
+                raw = json.loads(await asyncio.wait_for(ws.recv(), timeout=65))
+                if raw.get("id") == 20:
+                    resp = raw
+                    break
+
+            if not resp:
+                logger.warning("[%s] 신고서 printToPDF 응답 없음", name)
+                return False
+
+            import base64
+            data_b64 = resp.get("result", {}).get("data", "")
+            if not data_b64:
+                logger.warning("[%s] 신고서 printToPDF 데이터 없음: %s",
+                               name, resp.get("error", {}))
+                return False
+
+            pdf_bytes = base64.b64decode(data_b64)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(pdf_bytes)
+            logger.info("[%s] 신고서 저장: %s (%d bytes)", name, dest.name, len(pdf_bytes))
+            return True
+
+    except Exception as e:
+        logger.error("[%s] 신고서 UTERNAAZ34 처리 오류: %s", name, e)
+        return False
+
+
+# ── 신고서: col[10] 접수번호 링크 → UTERNAAZ 팝업 처리 → PDF ─────────────
 
 async def _download_shingoser(
     ws_main,
-    appno_cell_idx: int,
     row_idx: int,
     dest: Path,
     name: str,
 ) -> bool:
-    """접수번호(신고보기) 링크 클릭 → 뷰어 팝업 → 일괄출력 → clipreport → PDF"""
+    """col[10] 접수번호 A링크 클릭 → 팝업 분기 처리 → PDF
+
+    흐름:
+      클릭
+       ├─ UTERNAAZ39(개인정보 설정) → 적용 클릭 → 닫기
+       ├─ ClipReport(접수증 탭)    → 즉시 닫기
+       └─ UTERNAAZ34(신고서 보기) → 일괄출력 → printToPDF
+
+    주의: 메인 WS recv() timeout 루프 절대 금지.
+    """
     known_tabs = _get_all_tab_ids()
 
-    # 링크 클릭 (JS)
     clicked = await _eval(ws_main, f"""(function() {{
     var container = document.querySelector('[id*="UTERNAAZ0Z31_wframe"]');
     if (!container) return 'no_container';
@@ -279,71 +502,99 @@ async def _download_shingoser(
     var row = rows[{row_idx}];
     if (!row) return 'no_row';
     var tds = Array.from(row.querySelectorAll('td'));
-    var cell = tds[{COL_APPNO}];
+    var cell = tds[{COL_SHINGOSER}];
     if (!cell) return 'no_cell';
-    var a = cell.querySelector('a');
-    if (!a) return 'no_link';
-    a.click();
-    return 'clicked';
+    var btn = cell.querySelector('input[type=button], button, a');
+    if (!btn) return 'no_btn:' + cell.innerText.trim().slice(0,20);
+    btn.click();
+    return 'clicked:' + (btn.value || btn.innerText || btn.textContent || '?').trim().slice(0,20);
 }})()""", cmd_id=10 + row_idx)
 
-    if clicked != "clicked":
-        logger.warning("[%s] 신고서 링크 없음: %s", name, clicked)
+    if not clicked or "clicked" not in str(clicked):
+        logger.warning("[%s] 신고서 버튼 없음: %s", name, clicked)
         return False
+    logger.info("[%s] 신고서 버튼 클릭: %s", name, clicked)
 
-    # 뷰어 팝업 대기
-    viewer_tab = _get_new_tab(known_tabs, timeout_s=20)
-    if not viewer_tab:
-        logger.warning("[%s] 신고서 뷰어 팝업 못 찾음", name)
-        return False
+    # ── 새 탭 수집 (최대 15초, UTERNAAZ34 감지 시 조기 종료) ──────────────
+    popup34_tab = None
+    popup39_tab = None
+    clipreport_tab = None
+    seen_ids = set(known_tabs)
 
-    logger.info("[%s] 신고서 뷰어 탭: %s", name, viewer_tab.get("url","")[:60])
+    for _ in range(30):
+        await asyncio.sleep(0.5)
+        tabs_now = requests.get(f"http://localhost:{CDP_PORT}/json").json()
+        for t in tabs_now:
+            if t["id"] in seen_ids:
+                continue
+            seen_ids.add(t["id"])
+            url = t.get("url", "")
+            if "UTERNAAZ34" in url:
+                popup34_tab = t
+                logger.info("[%s] UTERNAAZ34 팝업 감지: %s", name, url[:80])
+            elif "UTERNAAZ39" in url:
+                popup39_tab = t
+                logger.info("[%s] UTERNAAZ39 개인정보 팝업 감지", name)
+            elif "sesw.hometax" in url or "clipreport" in url.lower():
+                clipreport_tab = t
+                logger.info("[%s] 접수증 ClipReport 탭 감지 → 닫기 예약", name)
+        if popup34_tab:
+            break
 
-    # 뷰어 로딩 대기
-    await asyncio.sleep(4)
-
-    # 일괄출력 클릭
-    known_tabs2 = _get_all_tab_ids()
-    try:
-        async with websockets.connect(viewer_tab["webSocketDebuggerUrl"]) as ws_viewer:
-            await asyncio.sleep(2)
-            result = await _eval(ws_viewer, """(function() {
-    var btn = Array.from(document.querySelectorAll("input[value='일괄출력'], button"))
-        .find(function(el) { return (el.value || el.innerText || '').trim() === '일괄출력'; });
+    # UTERNAAZ39 (개인정보 공개여부) → 적용 클릭
+    if popup39_tab:
+        try:
+            async with websockets.connect(popup39_tab["webSocketDebuggerUrl"]) as ws39:
+                await asyncio.sleep(1.5)
+                r39 = await _eval(ws39, """(function(){
+    var btn = Array.from(document.querySelectorAll('input[type=button],button'))
+        .find(function(b){
+            return (b.value||b.innerText||'').trim() === '적용';
+        });
     if (!btn) return 'no_btn';
     btn.click();
-    return 'clicked';
-})()""", cmd_id=20)
-            logger.info("[%s] 신고서 일괄출력 클릭: %s", name, result)
-    except Exception as e:
-        logger.warning("[%s] 신고서 뷰어 연결 오류: %s", name, e)
-        return False
+    return 'clicked:적용';
+})()""", cmd_id=5)
+                logger.info("[%s] UTERNAAZ39 적용: %s", name, r39)
+        except Exception as e:
+            logger.warning("[%s] UTERNAAZ39 처리 오류: %s", name, e)
+        # 적용 후 UTERNAAZ34 추가 대기
+        if not popup34_tab:
+            for _ in range(20):
+                await asyncio.sleep(0.5)
+                tabs_now = requests.get(f"http://localhost:{CDP_PORT}/json").json()
+                for t in tabs_now:
+                    if t["id"] in seen_ids:
+                        continue
+                    seen_ids.add(t["id"])
+                    url = t.get("url", "")
+                    if "UTERNAAZ34" in url:
+                        popup34_tab = t
+                        logger.info("[%s] UTERNAAZ39→34 전환 감지", name)
+                    elif "sesw.hometax" in url or "clipreport" in url.lower():
+                        clipreport_tab = t
+                if popup34_tab:
+                    break
 
-    # ClipReport 탭 대기
-    cr_tab = _get_new_tab(known_tabs2, timeout_s=30)
-    if not cr_tab:
-        # fallback: url에 clipreport 포함 탭 탐색
-        for _ in range(40):
-            time.sleep(1)
-            tabs = requests.get(f"http://localhost:{CDP_PORT}/json").json()
-            cr_tab = next((t for t in tabs if "clipreport" in t.get("url","").lower()), None)
-            if cr_tab:
-                break
-
-    if not cr_tab:
-        logger.warning("[%s] 신고서 clipreport 탭 못 찾음", name)
-        return False
-
-    # PDF 저장
-    ok = await _download_from_clipreport(cr_tab, dest, name, "신고서")
-
-    # 탭 닫기
-    for tab in [cr_tab, viewer_tab]:
+    # 접수증 ClipReport 탭 → 접수증은 _download_receipt(col[12])로 별도 처리, 여기선 탭만 닫기
+    if clipreport_tab:
+        logger.info("[%s] 접수번호 클릭으로 열린 ClipReport 탭 닫기", name)
         try:
-            requests.get(f"http://localhost:{CDP_PORT}/json/close/{tab['id']}")
+            requests.get(f"http://localhost:{CDP_PORT}/json/close/{clipreport_tab['id']}")
         except Exception:
             pass
 
+    # UTERNAAZ34 없으면 실패
+    if not popup34_tab:
+        logger.warning("[%s] UTERNAAZ34 신고서 보기 팝업 미감지 — 스킵", name)
+        return False
+
+    # UTERNAAZ34 → 일괄출력 → printToPDF
+    ok = await _handle_uternaaz34_to_pdf(popup34_tab, dest, name)
+    try:
+        requests.get(f"http://localhost:{CDP_PORT}/json/close/{popup34_tab['id']}")
+    except Exception:
+        pass
     return ok
 
 
@@ -380,12 +631,11 @@ async def _download_receipt(
 
     logger.info("[%s] 접수증 버튼 클릭: %s", name, clicked)
 
-    # ClipReport 탭 대기 (새 탭 폴링)
-    cr_tab = _get_new_tab(known_tabs, timeout_s=30)
+    # ClipReport 탭 대기 (async 폴링)
+    cr_tab = await _get_new_tab(known_tabs, timeout_s=30)
     if not cr_tab:
-        # URL에 clipreport 포함 탭도 탐색
         for _ in range(30):
-            time.sleep(1)
+            await asyncio.sleep(1)
             tabs = requests.get(f"http://localhost:{CDP_PORT}/json").json()
             cr_tab = next((t for t in tabs
                           if t["id"] not in known_tabs
@@ -442,11 +692,48 @@ async def _download_taxbill(
 
     logger.info("[%s] %s 버튼 클릭: %s", name, label, clicked)
 
-    # ClipReport 탭 대기
-    cr_tab = _get_new_tab(known_tabs, timeout_s=30)
+    # 납부서 팝업(TERNAAZ68) 처리: '출력' 버튼 클릭해야 ClipReport 열림
+    # ('전자납부 바로가기'·'개인지방소득세 신고 이동'은 위택스 이동 — 절대 클릭 금지)
+    popup_handled = False
+    for attempt in range(10):  # 최대 5초 대기
+        await asyncio.sleep(0.5)
+        r = await _eval(ws_main, """(function(){
+    var containers = Array.from(document.querySelectorAll('[id*="TERNAAZ68"]'));
+    for (var c of containers) {
+        if (!c.offsetParent) continue;
+        var r = c.getBoundingClientRect();
+        if (r.width < 10 || r.height < 10) continue;
+        var btns = Array.from(c.querySelectorAll('input[type=button],button'));
+        var printBtn = btns.find(function(b){ return (b.value||b.innerText||'').trim() === '출력'; });
+        if (printBtn) { printBtn.click(); return 'clicked:출력'; }
+    }
+    return 'none';
+})()""", cmd_id=300 + attempt)
+        if r and r != 'none':
+            logger.info("[%s] %s 납부서 팝업 출력 클릭 (%d회)", name, label, attempt + 1)
+            popup_handled = True
+            await asyncio.sleep(0.5)
+            break
+
+    if not popup_handled:
+        # 세액 없는 고객 → TERNAAZ68 팝업 없음 = 위택스 탭이 열렸을 수 있음
+        logger.info("[%s] %s 납부서 팝업 없음 — 세액 없는 고객으로 판단, 스킵", name, label)
+        try:
+            tabs_now = requests.get(f"http://localhost:{CDP_PORT}/json").json()
+            for t in tabs_now:
+                url_lower = t.get("url", "").lower()
+                if t["id"] not in known_tabs and ("wetax" in url_lower or "witax" in url_lower or "etax" in url_lower):
+                    requests.get(f"http://localhost:{CDP_PORT}/json/close/{t['id']}")
+                    logger.info("[%s] 위택스 탭 닫음: %s", name, t.get("url", "")[:80])
+        except Exception as e:
+            logger.warning("[%s] 위택스 탭 닫기 오류: %s", name, e)
+        return False
+
+    # ClipReport 탭 대기 (30초 폴링)
+    cr_tab = await _get_new_tab(known_tabs, timeout_s=30)
     if not cr_tab:
         for _ in range(30):
-            time.sleep(1)
+            await asyncio.sleep(1)
             tabs = requests.get(f"http://localhost:{CDP_PORT}/json").json()
             cr_tab = next((t for t in tabs
                           if t["id"] not in known_tabs
@@ -540,39 +827,78 @@ async def run_async():
     today = date.today().strftime("%Y-%m-%d")
     logger.info("=== 홈택스 신고결과 스크래핑 시작: %s ~ %s ===", START_DATE, today)
 
+    # 기존 홈택스 탭 사용 (새 탭 생성은 Edge에서 불안정 — WS 즉시 닫힘)
     ht_tab = _get_hometax_tab()
     if not ht_tab:
-        logger.error("홈택스 탭 없음! Edge에서 홈택스 로그인 후 다시 실행하세요.")
+        logger.error("홈택스 탭 없음!")
         return
-
     ws_url = ht_tab["webSocketDebuggerUrl"]
     logger.info("홈택스 탭 연결: %s", ws_url[:60])
 
-    async with websockets.connect(ws_url) as ws:
+    async with websockets.connect(ws_url, ping_interval=None) as ws:
         logger.info("CDP 연결 성공!")
 
-        # 1. 신고내역 페이지 이동
-        logger.info("신고내역 페이지 이동...")
-        await ws.send(json.dumps({
-            "id": 1, "method": "Page.navigate",
-            "params": {"url": RESULT_URL}
-        }))
-        while True:
-            resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
-            if resp.get("id") == 1:
-                break
-        await asyncio.sleep(4)
+        # 혹시 이전 실행 후 남아있는 JS 다이얼로그(aliasDataMap 경고 등) 먼저 처리
+        await _dismiss_dialog_if_any(ws)
 
-        # 2. 신고내역조회 팝업 열기
-        logger.info("신고내역조회 팝업 열기...")
-        open_result = await _eval(ws, f"""(function() {{
+        # 1. 페이지 로딩 대기
+        await asyncio.sleep(3)
+        cur_url = await _eval(ws, "window.location.href", cmd_id=99)
+        logger.info("현재 URL: %s", (cur_url or "")[:80])
+
+        if cur_url and "tmIdx=04" in cur_url and "tm2lIdx=0405000000" in cur_url:
+            logger.info("이미 신고내역 페이지 — navigate 생략")
+            await asyncio.sleep(2)
+        else:
+            logger.info("신고내역 페이지 이동...")
+            await ws.send(json.dumps({
+                "id": 1, "method": "Page.navigate",
+                "params": {"url": RESULT_URL}
+            }))
+            while True:
+                resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
+                if resp.get("id") == 1:
+                    break
+            await asyncio.sleep(8)  # WebSquare 완전 초기화 대기
+
+        # window.alert/confirm 무력화 — WebSquare aliasDataMap 경고 등이 native 다이얼로그로
+        # 떠서 Runtime.evaluate 를 차단하는 것 방지
+        await _eval(ws, """
+window.alert   = function(m){ console.log('[alert]',  m); };
+window.confirm = function(m){ console.log('[confirm]',m); return true; };
+window.prompt  = function(m){ console.log('[prompt]', m); return ''; };
+""", cmd_id=498)
+        logger.info("window.alert 무력화 완료")
+
+        # 2. 신고내역조회 팝업 열기 (이미 열려있으면 스킵 — 중복 열기 시 aliasDataMap 경고 발생)
+        _already_open = await _eval(ws, f"""
+document.getElementById('{SELECT_ROWNUM}') ? 'open' : 'closed'
+""", cmd_id=497)
+        logger.info("팝업 상태: %s", _already_open)
+        if _already_open == 'open':
+            logger.info("팝업 이미 열려있음 — 팝업 열기 스킵")
+        else:
+            logger.info("신고내역조회 팝업 열기...")
+            open_result = await _eval(ws, f"""(function() {{
     var btn = document.getElementById('{BTN_RTN_POPUP}');
     if (!btn) return 'no_btn';
     btn.click();
     return 'clicked';
 }})()""", cmd_id=2)
-        logger.info("팝업 열기: %s", open_result)
-        await asyncio.sleep(3)
+            logger.info("팝업 열기: %s", open_result)
+
+        # 팝업 내 SELECT 가 나타날 때까지 최대 15초 폴링 (서버 느릴 때 대비)
+        for _wait in range(30):
+            await asyncio.sleep(0.5)
+            _sel_check = await _eval(ws, f"""(function(){{
+    var s = document.getElementById('{SELECT_ROWNUM}');
+    return s ? 'found' : 'waiting';
+}})()""", cmd_id=50)
+            if _sel_check == "found":
+                logger.info("팝업 로딩 완료 (%ss)", (_wait+1)*0.5)
+                break
+        else:
+            logger.warning("팝업 SELECT 15초 이상 미감지 — 계속 진행")
 
         # 3. 날짜는 기본 1개월 그대로 사용 (변경 시 WebSquare 검증 오류 발생)
         # 1개월 버튼 클릭으로 초기화 (혹시 다른 범위로 되어있을 경우 대비)
@@ -615,6 +941,8 @@ async def run_async():
         logger.info("총 %d건 처리 시작", len(rows_info))
 
         processed = 0
+
+        # ── 행별 처리: 메인 WS 유지 (팝업 계속 열려있음) ──────────────────
         for r in rows_info:
             row_idx = r["idx"]
             name    = r["name"]
@@ -626,42 +954,26 @@ async def run_async():
                 logger.warning("[%s] 고객 폴더 없음 — 스킵", name)
                 continue
 
-            # ① 접수증
+            # ① 접수증 (col[12] 빨강버튼 → ClipReport → PDF 버튼)
             receipt = folder / f"종합소득세 접수증 {name}.pdf"
             if receipt.exists():
                 logger.info("[%s] 접수증 이미 있음 — 스킵", name)
             else:
                 await _download_receipt(ws, row_idx, receipt, name)
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
 
-            # ② 신고서
+            # ② 신고서 (col[10] 접수번호 클릭 → UTERNAAZ39 적용 → UTERNAAZ34 일괄출력 → printToPDF)
             shingoser = folder / f"종합소득세 신고서 {name}.pdf"
             if shingoser.exists():
                 logger.info("[%s] 신고서 이미 있음 — 스킵", name)
             else:
-                await _download_shingoser(ws, COL_APPNO, row_idx, shingoser, name)
-                await asyncio.sleep(1)
-
-            # ③ 납부서 (종합소득세)
-            taxbill = folder / f"종합소득세 납부서 {name}.pdf"
-            if taxbill.exists():
-                logger.info("[%s] 종소세 납부서 이미 있음 — 스킵", name)
-            else:
-                await _download_taxbill(ws, COL_TAX, row_idx, taxbill, name, "종소세납부서")
-                await asyncio.sleep(1)
-
-            # ④ 지방세 납부서
-            local = folder / f"지방소득세 납부서 {name}.pdf"
-            if local.exists():
-                logger.info("[%s] 지방세 납부서 이미 있음 — 스킵", name)
-            else:
-                await _download_taxbill(ws, COL_LOCAL, row_idx, local, name, "지방세납부서")
+                await _download_shingoser(ws, row_idx, shingoser, name)
                 await asyncio.sleep(1)
 
             processed += 1
             await asyncio.sleep(1)
 
-    logger.info("=== 스크래핑 완료: %d건 처리 ===", processed)
+        logger.info("=== 스크래핑 완료: %d건 처리 ===", processed)
 
 
 def run():
