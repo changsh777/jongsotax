@@ -69,45 +69,8 @@ _NAS_CANDIDATES = [
     Path("/Volumes/장성환-1/종소세2026/고객"),
     Path("/Users/changmini/mnt/장성환/종소세2026/고객"),
 ]
-_BOT_MOUNT = Path("/Users/changmini/mnt/장성환")
-
-def _self_mount_nas() -> Path | None:
-    """기존 마운트 정리 후 봇 프로세스에서 직접 mount_smbfs 실행"""
-    import subprocess
-    from urllib.parse import quote
-    from time import sleep as _sleep
-    # 기존 장성환 마운트 전부 언마운트
-    mnt_out = subprocess.run(['mount'], capture_output=True, text=True).stdout
-    for line in mnt_out.splitlines():
-        if '장성환' in line and ' on ' in line:
-            mp = line.split(' on ')[1].split(' ')[0]
-            subprocess.run(['diskutil', 'unmount', mp], capture_output=True)
-            logger.info("기존 마운트 해제: %s", mp)
-    _sleep(1)
-    try:
-        pw_raw = subprocess.check_output(
-            ['security', 'find-internet-password', '-s', '192.168.0.100', '-a', 'admin', '-w'],
-            stderr=subprocess.DEVNULL).decode().strip()
-    except Exception as e:
-        logger.error("Keychain 조회 실패: %s", e); return None
-    pw = quote(pw_raw, safe='')
-    share = quote('장성환', safe='')
-    _BOT_MOUNT.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(['mount_smbfs', f'//admin:{pw}@192.168.0.100/{share}', str(_BOT_MOUNT)],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        logger.error("self-mount 실패: %s", r.stderr.strip()); return None
-    _sleep(2)
-    target = _BOT_MOUNT / '종소세2026' / '고객'
-    try:
-        next(target.iterdir()); logger.info("self-mount 성공: %s", target); return target
-    except StopIteration:
-        return target
-    except Exception as e:
-        logger.error("self-mount 후 접근 실패: %s", e); return None
-
-def _resolve_nas() -> Path | None:
-    """접근 가능한 NAS 경로 탐색. 모두 실패 시 봇이 직접 마운트."""
+def _resolve_nas():
+    """접근 가능한 NAS 경로를 runtime에 탐색"""
     for p in _NAS_CANDIDATES:
         try:
             next(p.iterdir()); return p
@@ -115,8 +78,8 @@ def _resolve_nas() -> Path | None:
             return p
         except Exception:
             continue
-    logger.warning("NAS 기존 마운트 접근 불가 — self-mount 시도")
-    return _self_mount_nas()
+    logger.error("NAS 접근 불가 — 모든 경로 실패: %s", _NAS_CANDIDATES)
+    return None
 
 def nas_ok() -> bool:
     return _resolve_nas() is not None
