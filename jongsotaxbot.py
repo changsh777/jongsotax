@@ -1107,7 +1107,13 @@ def wait_for_nas(path: Path, timeout: int = 60) -> bool:
 # ===== 메인 =====
 def main():
     acquire_pid_lock("jongsotaxbot")
-    if not wait_for_nas(_NAS_CANDIDATES[0]):
+    _nas_found = False
+    for _nas_cand in _NAS_CANDIDATES:
+        if wait_for_nas(_nas_cand):
+            _nas_found = True
+            logger.info("NAS 연결 확인: %s", _nas_cand)
+            break
+    if not _nas_found:
         logger.warning("NAS 대기 타임아웃 (60s) — NAS 없이 시작")
 
     app = Application.builder().token(TOKEN).build()
