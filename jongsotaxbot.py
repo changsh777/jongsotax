@@ -1076,10 +1076,39 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await resolve_choice(update, context)
 
 
+# ===== 중복 실행 방지 + NAS 대기 =====
+def acquire_pid_lock(name: str):
+    import os, sys, atexit
+    pid_file = Path.home() / f".{name}.pid"
+    if pid_file.exists():
+        try:
+            old_pid = int(pid_file.read_text().strip())
+            os.kill(old_pid, 0)
+            print(f"[{name}] 이미 실행 중 (PID {old_pid}) — 종료")
+            sys.exit(1)
+        except (ValueError, ProcessLookupError):
+            pid_file.unlink(missing_ok=True)
+    pid_file.write_text(str(os.getpid()))
+    atexit.register(pid_file.unlink, missing_ok=True)
+
+def wait_for_nas(path: Path, timeout: int = 60) -> bool:
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            next(path.iterdir()); return True
+        except StopIteration:
+            return True
+        except Exception:
+            time.sleep(3)
+    return False
+
+
 # ===== 메인 =====
 def main():
-    if not nas_ok():
-        logger.warning("NAS 미연결: %s", NAS_BASE)
+    acquire_pid_lock("jongsotaxbot")
+    if not wait_for_nas(_NAS_CANDIDATES[0]):
+        logger.warning("NAS 대기 타임아웃 (60s) — NAS 없이 시작")
 
     app = Application.builder().token(TOKEN).build()
 
