@@ -80,7 +80,8 @@ def find_folders(name: str) -> list[Path]:
             p for p in NAS_BASE.iterdir()
             if p.is_dir() and unicodedata.normalize("NFC", p.name).startswith(prefix)
         )
-    except Exception:
+    except Exception as e:
+        logger.error("find_folders 예외 [%s]: %s", type(e).__name__, e, exc_info=True)
         return []
 
 
