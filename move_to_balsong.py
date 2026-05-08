@@ -1,14 +1,29 @@
 # -*- coding: utf-8 -*-
 # 접수증 + 신고서를 올바른 발송용 폴더로 이동
 # 잘못 만들어진 {name}\ 폴더는 빈 경우 삭제
+# 발송용 root = 최신 / 발송용/_archive = 이전 버전 (타임스탬프)
 
 import os, shutil, unicodedata
+from datetime import datetime
 
 NAS        = r"Z:\종소세2026\고객"
 LOCAL      = r"C:\Users\pc\종소세2026"
 
 def nfc(s):
     return unicodedata.normalize("NFC", str(s))
+
+
+def archive_if_exists(dst):
+    """dst 파일이 이미 있으면 _archive 폴더로 타임스탬프 붙여 이동 (root=최신 원칙)"""
+    if not os.path.exists(dst):
+        return
+    archive_dir = os.path.join(os.path.dirname(dst), "_archive")
+    os.makedirs(archive_dir, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(dst))
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    archive_dst = os.path.join(archive_dir, f"{stem}_{ts}{ext}")
+    shutil.move(dst, archive_dst)
+    print(f"  아카이브: {os.path.basename(archive_dst)}")
 
 def find_customer_folder(name):
     """NAS에서 {name}_XXXXXX 폴더 찾기. 복수 hit 시 None 반환(경고)."""
@@ -53,11 +68,12 @@ for name in names:
     jeup_src = os.path.join(wrong_folder, f"{name}_접수증.pdf")
     jeup_dst = os.path.join(balsong, f"{name}_접수증.pdf")
     if os.path.exists(jeup_src):
+        archive_if_exists(jeup_dst)   # 기존 파일 있으면 _archive로
         shutil.move(jeup_src, jeup_dst)
         print(f"  접수증 이동: {jeup_dst}")
         moved_any = True
     elif os.path.exists(jeup_dst):
-        print(f"  접수증 이미 있음: {jeup_dst}")
+        print(f"  접수증 이미 있음 (최신): {jeup_dst}")
     else:
         print(f"  접수증 파일 없음")
 
@@ -71,11 +87,12 @@ for name in names:
     shingo_src = os.path.join(LOCAL, f"{name}_종합소득세.pdf")
     shingo_dst = os.path.join(balsong, f"{name}_종합소득세.pdf")
     if os.path.exists(shingo_src):
+        archive_if_exists(shingo_dst)  # 기존 파일 있으면 _archive로
         shutil.move(shingo_src, shingo_dst)
         print(f"  신고서 이동: {shingo_dst}")
         moved_any = True
     elif os.path.exists(shingo_dst):
-        print(f"  신고서 이미 있음: {shingo_dst}")
+        print(f"  신고서 이미 있음 (최신): {shingo_dst}")
     else:
         print(f"  신고서 파일 없음")
 

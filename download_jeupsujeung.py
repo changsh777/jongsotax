@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # 홈택스 접수증 일괄 PDF 다운로드
 # col[12] 보기 -> {name}_접수증.pdf
-# NAS: Z:/종소세2026/고객/{name}/  (NAS 없으면 로컬 C:/Users/pc/종소세2026)
-import requests, json, asyncio, websockets, pyautogui, time, os, shutil, traceback
+# 저장: Z:\종소세2026\고객\{name}_{birthdate}\발송용\  (root=최신, _archive=이전)
+import requests, json, asyncio, websockets, pyautogui, time, os, shutil, traceback, unicodedata
+from datetime import datetime
 
 CDP        = "http://localhost:9222"
 NAME_COL   = 6
@@ -14,13 +15,38 @@ ROW_SEL    = '[id*="UTERNAAZ0Z31_wframe"] table tbody tr'
 pyautogui.PAUSE = 0.15
 
 
-def get_save_dir(name):
+def _nfc(s):
+    return unicodedata.normalize("NFC", str(s))
+
+
+def find_balsong_dir(name):
+    """NAS에서 {name}_XXXXXX 폴더 찾아 발송용 서브폴더 반환. 없으면 LOCAL_BASE."""
+    name_nfc = _nfc(name)
     if os.path.isdir(NAS_BASE):
-        d = os.path.join(NAS_BASE, name)
-    else:
-        d = LOCAL_BASE
-    os.makedirs(d, exist_ok=True)
-    return d
+        hits = [d for d in os.listdir(NAS_BASE)
+                if _nfc(d).split("_")[0] == name_nfc
+                and len(_nfc(d).split("_")) >= 2
+                and os.path.isdir(os.path.join(NAS_BASE, d))]
+        if len(hits) == 1:
+            balsong = os.path.join(NAS_BASE, hits[0], "발송용")
+            os.makedirs(balsong, exist_ok=True)
+            return balsong
+        elif len(hits) > 1:
+            print(f"  !! 동명이인 {name}: {hits} — 로컬 저장")
+    os.makedirs(LOCAL_BASE, exist_ok=True)
+    return LOCAL_BASE
+
+
+def archive_if_exists(dst):
+    """dst 파일이 있으면 _archive 폴더로 타임스탬프 붙여 이동 (root=최신 원칙)"""
+    if not os.path.exists(dst):
+        return
+    archive_dir = os.path.join(os.path.dirname(dst), "_archive")
+    os.makedirs(archive_dir, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(dst))
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    shutil.move(dst, os.path.join(archive_dir, f"{stem}_{ts}{ext}"))
+    print(f"  아카이브: {stem}_{ts}{ext}")
 
 
 def get_screen_xy(bounds, vp_w, vp_h, vx, vy):
@@ -133,12 +159,8 @@ async def click_next_page(main_tab):
 # ── 1건 처리 ─────────────────────────────────────────────────────────────────
 
 async def process_jeupsujeung(main_tab, row_idx, name, known_ids):
-    sdir = get_save_dir(name)
+    sdir = find_balsong_dir(name)
     dst  = os.path.join(sdir, f"{name}_접수증.pdf")
-
-    if os.path.exists(dst):
-        print(f"  [{name}] 이미 있음 - 스킵")
-        return True
 
     print(f"\n{'='*50} [{name}] 접수증")
 
@@ -273,6 +295,7 @@ async def process_jeupsujeung(main_tab, row_idx, name, known_ids):
                     new_src = fp; break
 
         if new_src:
+            archive_if_exists(dst)   # 기존 파일 _archive로
             if new_src != dst:
                 shutil.move(new_src, dst)
             sz = os.path.getsize(dst) // 1024
@@ -331,11 +354,6 @@ async def run():
         for idx, row in enumerate(rows):
             name = row.get("name", "")
             if not name:
-                continue
-            sdir = get_save_dir(name)
-            dst  = os.path.join(sdir, f"{name}_접수증.pdf")
-            if os.path.exists(dst):
-                print(f"  [{name}] 이미 있음 - 스킵")
                 continue
             page_new += 1
             try:

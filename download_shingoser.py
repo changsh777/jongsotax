@@ -2,9 +2,10 @@
 홈택스 종합소득세 신고서 일괄 PDF 다운로드
 - 목록 전체 행 순서대로 처리
 - 고객명_종합소득세.pdf 저장
-- 이미 있으면 스킵
+- 저장: Z:\종소세2026\고객\{name}_{birthdate}\발송용\  (root=최신, _archive=이전)
 """
-import requests, json, asyncio, websockets, pyautogui, time, os, shutil, sys
+import requests, json, asyncio, websockets, pyautogui, time, os, shutil, sys, unicodedata
+from datetime import datetime
 
 # ═══════════════════════ 설정 ════════════════════════════════════════════════
 CDP        = "http://localhost:9222"
@@ -16,13 +17,38 @@ ROW_SEL    = '[id*="UTERNAAZ0Z31_wframe"] table tbody tr'
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def get_save_dir(name):
+def _nfc(s):
+    return unicodedata.normalize("NFC", str(s))
+
+
+def find_balsong_dir(name):
+    """NAS에서 {name}_XXXXXX 폴더 찾아 발송용 서브폴더 반환. 없으면 LOCAL_BASE."""
+    name_nfc = _nfc(name)
     if os.path.isdir(NAS_BASE):
-        d = os.path.join(NAS_BASE, name)
-    else:
-        d = LOCAL_BASE
-    os.makedirs(d, exist_ok=True)
-    return d
+        hits = [d for d in os.listdir(NAS_BASE)
+                if _nfc(d).split("_")[0] == name_nfc
+                and len(_nfc(d).split("_")) >= 2
+                and os.path.isdir(os.path.join(NAS_BASE, d))]
+        if len(hits) == 1:
+            balsong = os.path.join(NAS_BASE, hits[0], "발송용")
+            os.makedirs(balsong, exist_ok=True)
+            return balsong
+        elif len(hits) > 1:
+            print(f"  !! 동명이인 {name}: {hits} — 로컬 저장")
+    os.makedirs(LOCAL_BASE, exist_ok=True)
+    return LOCAL_BASE
+
+
+def archive_if_exists(dst):
+    """dst 파일이 있으면 _archive 폴더로 타임스탬프 붙여 이동 (root=최신 원칙)"""
+    if not os.path.exists(dst):
+        return
+    archive_dir = os.path.join(os.path.dirname(dst), "_archive")
+    os.makedirs(archive_dir, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(dst))
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    shutil.move(dst, os.path.join(archive_dir, f"{stem}_{ts}{ext}"))
+    print(f"  아카이브: {stem}_{ts}{ext}")
 
 pyautogui.PAUSE = 0.15
 
@@ -117,11 +143,8 @@ async def get_rows(ws):
 # ── 1건 처리 ─────────────────────────────────────────────────────────────────
 
 async def process_row(main_tab, row_idx, name, acpt, known_ids):
-    sdir = get_save_dir(name)
+    sdir = find_balsong_dir(name)
     dst  = os.path.join(sdir, f"{name}_종합소득세.pdf")
-    if os.path.exists(dst):
-        print(f"  [{name}] 이미 있음 — 스킵")
-        return True
 
     print(f"\n{'='*60}")
     print(f"  처리: {name} / 접수번호: {acpt} (행 {row_idx})")
@@ -307,6 +330,7 @@ async def process_row(main_tab, row_idx, name, acpt, known_ids):
                 new_src = dld_pdf
 
         if new_src:
+            archive_if_exists(dst)   # 기존 파일 _archive로
             if new_src != dst:
                 shutil.move(new_src, dst)
             size_kb = os.path.getsize(dst) // 1024
@@ -398,22 +422,6 @@ async def run():
     base   = NAS_BASE if nas_ok else LOCAL_BASE
     print(f"저장 경로: {'NAS ' + NAS_BASE if nas_ok else '로컬 ' + LOCAL_BASE}")
 
-    # 로컬 C:\Users\pc\종소세2026 에 이전 파일이 있으면 NAS 고객 폴더로 이동
-    if nas_ok and os.path.isdir(LOCAL_BASE):
-        moved = 0
-        for fn in os.listdir(LOCAL_BASE):
-            if fn.endswith("_종합소득세.pdf"):
-                name = fn.replace("_종합소득세.pdf", "")
-                sdir = get_save_dir(name)
-                src  = os.path.join(LOCAL_BASE, fn)
-                dst  = os.path.join(sdir, fn)
-                if not os.path.exists(dst):
-                    shutil.move(src, dst)
-                    moved += 1
-                    print(f"  이동: {fn} → {dst}")
-        if moved:
-            print(f"  로컬→NAS 이동 완료: {moved}건")
-
     tabs = requests.get(f"{CDP}/json").json()
     main = next((t for t in tabs if "hometax.go.kr" in t.get("url","")
                  and "websquare.html" in t.get("url","")
@@ -458,10 +466,6 @@ async def run():
             acpt = row["acpt"]
             if not name:
                 print(f"  행{idx}: 이름 없음 — 스킵"); continue
-            sdir = get_save_dir(name)
-            dst  = os.path.join(sdir, f"{name}_종합소득세.pdf")
-            if os.path.exists(dst):
-                print(f"  [{name}] 이미 있음 — 스킵"); continue
             page_new += 1
             try:
                 ok = await process_row(main, idx, name, acpt, known_ids)
