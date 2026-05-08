@@ -516,6 +516,7 @@ async def _send_package(context: ContextTypes.DEFAULT_TYPE, update: Update,
 
 # ===== /작업 =====
 async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("[CMD] /work 수신: user=%s text=%s", update.effective_user.id if update.effective_user else "?", (update.message.text or "")[:50] if update.message else "?")
     if not is_allowed(update): return
     name     = parse_name_arg(update, context)
     jangbu   = parse_jangbu_arg(update, context)
@@ -564,7 +565,9 @@ async def do_work(update: Update, folder: Path, force_jangbu: str = ""):
         parts  = folder.name.rsplit("_", 1)
         _name  = parts[0]
         jumin6 = parts[1][:6] if len(parts) > 1 else ""
-        out = make_jakupan(_name, jumin6, force_jangbu=force_jangbu)
+        from functools import partial as _partial
+        loop = asyncio.get_running_loop()
+        out = await loop.run_in_executor(None, _partial(make_jakupan, _name, jumin6, force_jangbu=force_jangbu))
         if not out:
             await update.message.reply_text("⚠️ 작업판 생성 실패 — 기존 파일이 있으면 그대로 전송합니다.")
     except Exception as e:
@@ -587,7 +590,7 @@ async def do_work(update: Update, folder: Path, force_jangbu: str = ""):
     # 전년도 신고서 PDF (예: 20250513_2024신고서_홍길동.pdf — 신고서.pdf 제외)
     prev_pdf = [f for f in root_files
                 if "신고서" in nfc(f.name) and f.suffix == ".pdf"
-                and f.name != "신고서.pdf"]
+                and nfc(f.name) != "신고서.pdf"]
     files_to_send.extend(prev_pdf)
 
     # ⚠️ 전년도 신고서 없음 알림 (신규 고객 — 수동 업로드 필요)
