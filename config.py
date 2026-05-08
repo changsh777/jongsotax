@@ -13,8 +13,13 @@ ENV = os.environ.get("SEOTAX_ENV", "local")
 
 # ----- 경로 정의 -----
 if platform.system() == "Darwin":
-    # 맥미니 — NAS SMB 마운트
-    BASE = Path("/Volumes/장성환/종소세2026")
+    # 맥미니 — NAS SMB 마운트 (마운트 위치 자동탐지)
+    _candidates = [
+        Path("/Volumes/장성환/종소세2026"),
+        Path("/Volumes/장성환-1/종소세2026"),
+        Path("/Users/changmini/mnt/장성환/종소세2026"),
+    ]
+    BASE = next((p for p in _candidates if p.exists()), Path("/Volumes/장성환/종소세2026"))
 elif ENV == "nas":
     # Windows NAS (Z: 드라이브 마운트)
     BASE = Path(r"Z:\종소세2026")
