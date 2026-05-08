@@ -64,8 +64,26 @@ user_pending: dict[int, dict] = {}
 
 
 # ===== 유틸 =====
+_NAS_CANDIDATES = [
+    Path("/Volumes/장성환/종소세2026/고객"),
+    Path("/Volumes/장성환-1/종소세2026/고객"),
+    Path("/Users/changmini/mnt/장성환/종소세2026/고객"),
+]
+
+def _resolve_nas() -> Path | None:
+    """실제 접근 가능한 NAS 경로를 runtime에 탐색"""
+    for p in _NAS_CANDIDATES:
+        try:
+            next(p.iterdir())
+            return p
+        except StopIteration:
+            return p  # 빈 폴더지만 접근은 됨
+        except Exception:
+            continue
+    return None
+
 def nas_ok() -> bool:
-    return NAS_BASE.exists()
+    return _resolve_nas() is not None
 
 
 def find_folders(name: str) -> list[Path]:
@@ -73,15 +91,19 @@ def find_folders(name: str) -> list[Path]:
     NFD/NFC 양쪽 다 NFC로 정규화 후 비교 (Mac SMB 한글 인코딩 차이 회피)
     """
     import unicodedata
+    base = _resolve_nas()
+    if base is None:
+        logger.error("find_folders: NAS 접근 불가 — 모든 경로 실패")
+        return []
     name_nfc = unicodedata.normalize("NFC", name)
     prefix   = f"{name_nfc}_"
     try:
         return sorted(
-            p for p in NAS_BASE.iterdir()
+            p for p in base.iterdir()
             if p.is_dir() and unicodedata.normalize("NFC", p.name).startswith(prefix)
         )
     except Exception as e:
-        logger.error("find_folders 예외 [%s]: %s", type(e).__name__, e, exc_info=True)
+        logger.error("find_folders 예외 [%s] @ %s: %s", type(e).__name__, base, e, exc_info=True)
         return []
 
 
