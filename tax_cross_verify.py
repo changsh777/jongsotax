@@ -128,8 +128,9 @@ def parse_tax_return(pdf_path: Path) -> dict:
     result = {"파일": pdf_path.name}
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            p1 = pdf.pages[0].extract_text() or ""
-            p2 = pdf.pages[1].extract_text() if len(pdf.pages) > 1 else ""
+            p1 = unicodedata.normalize("NFC", pdf.pages[0].extract_text() or "")
+            p2 = unicodedata.normalize("NFC", pdf.pages[1].extract_text() if len(pdf.pages) > 1 else "")
+            p3 = unicodedata.normalize("NFC", pdf.pages[2].extract_text() if len(pdf.pages) > 2 else "")
     except Exception as e:
         result["오류"] = str(e)
         return result
@@ -226,6 +227,20 @@ def parse_tax_return(pdf_path: Path) -> dict:
         result["납부세액"] = int(raw) if raw else None
     else:
         result["납부세액"] = None
+
+    # ── 소득종류별 금액 (3페이지 ❾ 종합소득금액 명세서) ─────────────
+    # 패턴: "근로소득금액 42,880,000 0 42,880,000" → 첫 번째 숫자
+    def _income_amt(text, keyword):
+        m = re.search(keyword + r'\s+([\d,]+)', text)
+        if not m:
+            return 0
+        return int(m.group(1).replace(",", ""))
+
+    result["근로소득금액"] = _income_amt(p3, r'근\s*로\s*소\s*득\s*금\s*액')
+    result["연금소득금액"] = _income_amt(p3, r'연\s*금\s*소\s*득\s*금\s*액')
+    result["기타소득금액"] = _income_amt(p3, r'기\s*타\s*소\s*득\s*금\s*액')
+    result["이자소득금액"] = _income_amt(p3, r'이\s*자\s*소\s*득\s*금\s*액')
+    result["배당소득금액"] = _income_amt(p3, r'배\s*당\s*소\s*득\s*금\s*액')
 
     return result
 
@@ -631,36 +646,44 @@ def cross_verify(
                 diff=round(변동, 2))
 
     # ── H. 소득종류 누락 검증 ────────────────────────────────────────
-    # 안내문에 O인 소득 → 신고서 텍스트에서 해당 소득 키워드 확인
-    # 신고서 파싱 raw text는 당기신고서에 없으므로 키워드 기반 확인 불가.
-    # 대신: 안내문 O 소득별로 warn 발생 → 직원이 신고서에서 수동 확인하도록 유도.
+    # 안내문 O/X + 신고서 소득금액으로 pass / fail 자동 판정
     소득_체크 = [
-        ("근로(단일)", "근로소득"),
-        ("근로(복수)", "근로소득 (복수)"),
-        ("기타",       "기타소득"),
-        ("연금",       "연금소득"),
-        ("이자",       "이자소득"),
-        ("배당",       "배당소득"),
+        ("근로(단일)", "근로소득금액", "근로소득"),
+        ("근로(복수)", "근로소득금액", "근로소득(복수)"),
+        ("연금",       "연금소득금액", "연금소득"),
+        ("기타",       "기타소득금액", "기타소득"),
+        ("이자",       "이자소득금액", "이자소득"),
+        ("배당",       "배당소득금액", "배당소득"),
     ]
-    ann_소득_있음 = False
-    for ann_key, 소득명 in 소득_체크:
-        ann_val = 안내문.get(ann_key, "X")
-        if str(ann_val).strip() != "O":
+    for ann_key, 신고서_key, 소득명 in 소득_체크:
+        ann_val   = str(안내문.get(ann_key, "X")).strip()
+        신고서_amt = 당기신고서.get(신고서_key)  # None=파싱못함, 0=없음, >0=있음
+
+        ann_O  = ann_val == "O"
+        신고_O = isinstance(신고서_amt, int) and 신고서_amt > 0
+
+        # 안내문도 X, 신고서도 0 → 스킵 (둘 다 없으면 표시 불필요)
+        if not ann_O and not 신고_O:
             continue
-        ann_소득_있음 = True
 
-        # 신고서 수입금액이 사업소득만으로 설명되는지 확인
-        # (정확한 자동판단 불가 → warn으로 수동 확인 유도)
-        add("소득종류 누락 검증", f"{소득명} — 안내문 O",
-            "[안내문]", "신고 대상 O",
-            "[신고서]", "직접 확인 필요",
-            "warn",
-            메모=f"안내문에 {소득명} 신고 대상 표시 — 신고서에 반영 여부 확인",
-            diff=None)
+        if ann_O and 신고_O:
+            상태 = "pass"
+            메모 = f"안내문 O / 신고서 {신고서_amt:,}원 ✓"
+        elif ann_O and not 신고_O:
+            if 신고서_amt is None:
+                상태 = "warn"
+                메모 = "안내문 O — 신고서 3페이지 파싱 실패, 수동 확인"
+            else:
+                상태 = "fail"
+                메모 = f"안내문 O인데 신고서 {소득명} 0원 — 누락 의심"
+        else:  # ann_X, 신고_O
+            상태 = "warn"
+            메모 = f"안내문 X인데 신고서 {신고서_amt:,}원 — 예상 외 소득"
 
-    if not ann_소득_있음:
-        # 사업소득만 있는 경우 정상
-        pass
+        add("소득종류 누락 검증", 소득명,
+            "[안내문]", ann_val,
+            f"[신고서] {소득명}", 신고서_amt if 신고서_amt is not None else "파싱실패",
+            상태, 메모=메모, diff=None)
 
     return results
 
