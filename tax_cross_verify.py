@@ -815,8 +815,7 @@ def generate_html(
     for r in verify_results:
         섹션별.setdefault(r["섹션"], []).append(r)
 
-    verify_html = ""
-    for 섹션, rows in 섹션별.items():
+    def _render_verify_section(섹션: str, rows: list, hdr_style: str = "") -> str:
         rows_html = ""
         for r in rows:
             cls = r["상태"]
@@ -826,7 +825,6 @@ def generate_html(
                     diff_str = f"{r['차이']:+.2f}"
                 else:
                     diff_str = f"{r['차이']:+,}" if r["차이"] != 0 else "0"
-
             rows_html += f"""
 <tr class="{cls}">
   <td class="status">{status_icon(r['상태'])}</td>
@@ -838,10 +836,9 @@ def generate_html(
   <td class="num" style="color:{'red' if r['차이'] and r['차이']!=0 and not isinstance(r['차이'],float) else '#555'}">{diff_str}</td>
   <td style="color:#666">{r.get('메모','')}</td>
 </tr>"""
-
-        verify_html += f"""
+        return f"""
 <div class="section">
-  <div class="sec-hdr">{섹션}</div>
+  <div class="sec-hdr" style="{hdr_style}">{섹션}</div>
   <table>
     <tr>
       <th style="width:30px"></th>
@@ -856,6 +853,27 @@ def generate_html(
     {rows_html}
   </table>
 </div>"""
+
+    # 소득종류 누락 검증 → summary-bar 바로 아래 최상단 배치
+    소득종류_rows = 섹션별.get("소득종류 누락 검증", [])
+    if 소득종류_rows:
+        _s_fail = any(r["상태"] == "fail" for r in 소득종류_rows)
+        _s_warn = any(r["상태"] == "warn" for r in 소득종류_rows)
+        _hdr_bg = "#c62828" if _s_fail else ("#e65100" if _s_warn else "#2e7d32")
+        소득종류_html = _render_verify_section(
+            "소득종류 누락 검증 (안내문 O/X ↔ 신고서 소득금액)",
+            소득종류_rows,
+            hdr_style=f"background:{_hdr_bg}",
+        )
+    else:
+        소득종류_html = ""
+
+    # 나머지 섹션들
+    verify_html = ""
+    for 섹션, rows in 섹션별.items():
+        if 섹션 == "소득종류 누락 검증":
+            continue
+        verify_html += _render_verify_section(섹션, rows)
 
     # 신고서 비교표 + 안내문 공제 체크
     당기_yr = 당기신고서.get("귀속연도", "당기")
@@ -1044,6 +1062,8 @@ def generate_html(
     </div>
   </div>
 </div>
+
+{소득종류_html}
 
 <div class="section">
   <div class="sec-hdr">파일 인식 결과</div>
