@@ -4,12 +4,15 @@ os.environ.setdefault("SEOTAX_ENV", "nas")
 sys.path.insert(0, r"F:\종소세2026")
 
 import unicodedata
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 from 종합소득세안내문조회 import process_one, ensure_output_workbook
 from jakupan_gen import make_jakupan
 from config import CUSTOMER_DIR
+
+VERIFY_SCRIPT = Path(r"F:\종소세2026\verify_folder_integrity.py")
 
 
 def jakupan_exists(name: str) -> bool:
@@ -70,3 +73,13 @@ with sync_playwright() as p:
 
 names = ", ".join(c["name"] for c in customers)
 print(f"[완료] {names} 처리 완료")
+
+# 배치 완료 후 혼입검증 자동 실행
+print("\n[혼입검증] 시작...")
+result = subprocess.run(
+    [sys.executable, str(VERIFY_SCRIPT)],
+    capture_output=True, text=True, encoding="utf-8", errors="replace"
+)
+print(result.stdout)
+if result.returncode != 0:
+    print(f"[혼입검증] 오류:\n{result.stderr}")
