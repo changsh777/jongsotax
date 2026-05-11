@@ -369,6 +369,12 @@ def parse_anneam(pdf_path: Path) -> dict:
     text_nsp = re.sub(r'\s', '', text)
     result["증명서류과소수취"] = "여" if "증명서류과소수취" in text_nsp else "부"
 
+    # ── 소득률 저조 안내 ────────────────────────────────────────────
+    result["소득률저조"] = "여" if "소득률저조" in text_nsp else "부"
+    # 평균소득률 파싱 (e.g. "평균소득률: 9.5")
+    m_avgrate = re.search(r'평균소득률\s*:\s*([\d.]+)', text)
+    result["평균소득률"] = float(m_avgrate.group(1)) if m_avgrate else None
+
     return result
 
 
@@ -1023,6 +1029,8 @@ def generate_html(
 
     # 증명서류 과소수취 안내
     과소수취_여부 = 안내문_data.get("증명서류과소수취", "부")
+    소득률저조_여부 = 안내문_data.get("소득률저조", "부")
+    평균소득률_val  = 안내문_data.get("평균소득률")   # float or None
 
     def _red(txt: str) -> str:
         return f'<span style="color:#c62828;font-weight:bold">{txt}</span>'
@@ -1041,6 +1049,20 @@ def generate_html(
         )
     else:
         _과소수취_html = ""
+
+    # 소득률 저조 경고 블록
+    if 소득률저조_여부 == "여":
+        _avg_str = f" (업종평균 {평균소득률_val:.1f}%)" if 평균소득률_val is not None else ""
+        _소득률저조_html = (
+            '  <div style="margin-top:6px;padding:5px 10px;background:#fff8e1;'
+            'border-left:3px solid #f57f17;border-radius:2px;font-size:12px">'
+            '<span style="color:#e65100;font-weight:bold">! 소득률 저조 안내 있음</span>'
+            f'<span style="color:#888;margin-left:8px">'
+            f'&mdash; 신고소득률이 업종·외형·지역 평균의 80% 미만{_avg_str}. '
+            '소득금액 과소신고 여부 검토 필요</span></div>'
+        )
+    else:
+        _소득률저조_html = ""
 
     # 전기 행 (전기신고서 있을 때만) — 당기와 동일 스타일, 라벨만 회색
     _전기_행 = ""
@@ -1086,6 +1108,7 @@ def generate_html(
   </div>
 {_전기_행}
 {_과소수취_html}
+{_소득률저조_html}
 </div>"""
 
     # 소득종류 누락 검증 → summary-bar 바로 아래 최상단 배치
