@@ -1339,7 +1339,7 @@ def find_folder(name: str, jumin6: str = "") -> Path | None:
     return candidates[0] if candidates else None
 
 
-def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
+def run(name: str, jumin6: str = "", folder: Path = None, gender_hint: str | None = None) -> Path | None:
     if folder is None:
         folder = find_folder(name, jumin6)
     if not folder:
@@ -1380,6 +1380,7 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
 
     # 성별·부녀자공제는 파일마다 파싱 위치가 달라 분산됨
     # → 모든 raw 파일에서 찾은 값 중 첫 번째 유효값을 당기신고서에 주입
+    # → 신고서 전체 파싱 후에도 성별 불명이면 gender_hint(구글시트 주민번호) 사용
     if 신고서_list:
         당기 = 신고서_list[-1]
         if 당기.get("성별") not in ("여성", "남성"):
@@ -1387,6 +1388,8 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
                 if sr.get("성별") in ("여성", "남성"):
                     당기["성별"] = sr["성별"]
                     break
+        if 당기.get("성별") not in ("여성", "남성") and gender_hint in ("여성", "남성"):
+            당기["성별"] = gender_hint   # 구글시트 주민번호 기반 fallback
         if 당기.get("부녀자공제") is None:
             for sr in raw_신고서:
                 if sr.get("부녀자공제") is not None:
@@ -1492,7 +1495,7 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
 
 
 def load_customers():
-    """구글시트 접수명단 → [{name, jumin6}, ...]"""
+    """구글시트 접수명단 → [{name, jumin6, gender_hint}, ...]"""
     from gsheet_writer import get_credentials
     import gspread
     GSHEET_ID  = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
@@ -1509,7 +1512,17 @@ def load_customers():
         jumin = row[COL_JUMIN].strip() if len(row) > COL_JUMIN else ""
         if not name:
             continue
-        customers.append({"name": name, "jumin6": jumin.replace("-", "")[:6]})
+        jumin_clean = jumin.replace("-", "")
+        jumin6 = jumin_clean[:6]
+        # 주민번호 7번째 자리(뒷자리 첫 번째)로 성별 판별
+        gender_hint = None
+        if len(jumin_clean) >= 7:
+            gc_code = jumin_clean[6]
+            if gc_code in ("2", "4"):
+                gender_hint = "여성"
+            elif gc_code in ("1", "3"):
+                gender_hint = "남성"
+        customers.append({"name": name, "jumin6": jumin6, "gender_hint": gender_hint})
     return customers
 
 
@@ -1526,7 +1539,7 @@ def main():
         ok = err = 0
         for i, c in enumerate(customers, 1):
             try:
-                out = run(c["name"], c["jumin6"])
+                out = run(c["name"], c["jumin6"], gender_hint=c.get("gender_hint"))
                 if out:
                     ok += 1
                 else:
