@@ -164,6 +164,11 @@ async def process_jeupsujeung(main_tab, row_idx, name, known_ids):
 
     print(f"\n{'='*50} [{name}] 접수증")
 
+    # 이미 파일 있으면 스킵
+    if os.path.exists(dst):
+        print(f"  [{name}] 접수증 이미 존재 — 스킵")
+        return True
+
     # STEP 1: 접수증 보기 버튼 클릭 (pyautogui - 새 팝업 창 오픈 필요)
     async with websockets.connect(main_tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
         # 잔여 alert 안전망 (1.5초만 — 메인 alert는 run()에서 처리)
