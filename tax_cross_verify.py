@@ -253,6 +253,10 @@ def parse_tax_return(pdf_path: Path) -> dict:
     else:
         result["납부세액"] = None
 
+    # 사업자번호 (사업소득명세서 ⑤) — 자영업자 본인 사업자번호
+    m_biz = re.search(r'⑤\s*사\s*업\s*자\s*등\s*록\s*번\s*호\s*([\d\-]{10,14})', full)
+    result["사업자번호"] = m_biz.group(1).strip() if m_biz else ""
+
     # ── 소득종류별 금액 (3페이지 ❾ 종합소득금액 명세서) ─────────────
     # 패턴: "근로소득금액 42,880,000 0 42,880,000" → 첫 번째 숫자
     def _income_amt(text, keyword):
@@ -909,6 +913,9 @@ def generate_html(
     수입금액_안내  = 안내문_data.get("수입금액")
     수입금액_str   = f"{수입금액_안내:,}원" if isinstance(수입금액_안내, int) else "—"
 
+    업종코드_str   = str(당기신고서.get("업종코드", "") or "—").strip() or "—"
+    사업자번호_str  = str(당기신고서.get("사업자번호", "") or "—").strip() or "—"
+
     def _red(txt: str) -> str:
         return f'<span style="color:#c62828;font-weight:bold">{txt}</span>'
 
@@ -917,6 +924,20 @@ def generate_html(
             padding:12px 18px;margin-bottom:10px">
   <div style="color:#c62828;font-weight:bold;font-size:13px;margin-bottom:8px">
     📋 안내문 핵심 정보
+  </div>
+  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:8px">
+    <div>
+      <span style="color:#666;margin-right:4px">성명</span>
+      {_red(name)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">업종코드</span>
+      {_red(업종코드_str)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">사업자번호</span>
+      {_red(사업자번호_str)}
+    </div>
   </div>
   <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px">
     <div>
