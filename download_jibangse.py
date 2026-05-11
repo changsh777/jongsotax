@@ -149,7 +149,7 @@ async def process_row(main_tab, row_idx, name, known_ids):
     if (!link) return JSON.stringify({{err:'no_link', html:tipDiv.innerHTML.slice(0,200)}});
     link.click();
     return 'clicked:' + (link.getAttribute('onclick')||'').slice(0, 60);
-})()""", cmd_id=21)
+}})()""", cmd_id=21)
         print(f"  접수증 클릭: {result2}")
         if not result2 or 'no_' in str(result2) or 'err' in str(result2):
             print("  접수증 메뉴 없음"); return False
@@ -177,23 +177,29 @@ async def process_row(main_tab, row_idx, name, known_ids):
     known_ids.add(oz_tab["id"])
     print(f"  OZReport: {oz_tab['url'][:70]}")
 
-    # STEP 4: readyState 완료 + OZ 렌더링 대기 + Page.printToPDF
-    pdf_bytes = None
+    # STEP 4-A: readyState 완료 대기 (연결1 — 렌더링 전 닫힐 수 있어 분리)
     try:
         async with websockets.connect(oz_tab["webSocketDebuggerUrl"], ping_interval=None) as ws_oz:
-            # readyState complete 대기 (최대 20초)
             for _ in range(40):
                 rs = await _eval(ws_oz, "document.readyState", cmd_id=1)
                 if rs == "complete":
                     break
                 await asyncio.sleep(0.5)
+    except Exception:
+        pass  # readyState 실패해도 계속 진행
 
-            # OZ 렌더링 추가 대기
-            print("  OZ 렌더링 대기 (5초)...")
-            await asyncio.sleep(5)
+    # OZ 렌더링 대기 (연결 밖에서 — 연결 유지 불필요)
+    print("  OZ 렌더링 대기 (5초)...")
+    await asyncio.sleep(5)
 
-            print("  Page.printToPDF 실행...")
-            r = await _send(ws_oz, {"id": 50, "method": "Page.printToPDF", "params": {
+    # STEP 4-B: Page.printToPDF — 새 연결로 (기존 연결이 5초 대기 중 닫힐 수 있음)
+    pdf_bytes = None
+    print("  Page.printToPDF 실행...")
+    try:
+        fresh_tabs = requests.get(f"{CDP}/json").json()
+        oz_fresh = next((t for t in fresh_tabs if t["id"] == oz_tab["id"]), oz_tab)
+        async with websockets.connect(oz_fresh["webSocketDebuggerUrl"], ping_interval=None) as ws_pdf:
+            r = await _send(ws_pdf, {"id": 50, "method": "Page.printToPDF", "params": {
                 "printBackground": True,
                 "paperWidth":  8.27,    # A4
                 "paperHeight": 11.69,
@@ -204,7 +210,6 @@ async def process_row(main_tab, row_idx, name, known_ids):
                 "scale": 0.9,
                 "landscape": False,
             }}, timeout=30)
-
             data_b64 = r.get("result", {}).get("data", "")
             if data_b64:
                 pdf_bytes = base64.b64decode(data_b64)
