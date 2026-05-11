@@ -1122,14 +1122,14 @@ def generate_html(
 
 {안내문_요약_html}
 {소득종류_html}
+{신고서_html}
+{verify_html}
 
 <div class="section">
   <div class="sec-hdr">파일 인식 결과</div>
   <ul class="file-list">{file_rows}</ul>
 </div>
 
-{신고서_html}
-{verify_html}
 {지급_html}
 
 <div class="footer">
