@@ -13,7 +13,7 @@
 # 저장: Z:\종소세2026\고객\{name}_{jumin6}\발송용\{name}_지방세접수증.pdf
 # 완료 후: verify_folder_integrity.py --fix 자동 실행
 import sys, os, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 import requests, json, asyncio, websockets, shutil, traceback, unicodedata, base64, subprocess
 from datetime import datetime
@@ -98,12 +98,10 @@ async def get_rows(ws):
 # ── 1건 처리 ─────────────────────────────────────────────────────────────────
 
 async def close_tooltip(ws):
-    """열린 tooltipster 닫기"""
+    """열린 tooltipster 직접 숨기기 — tooltip-close 클릭 금지 (href="" 페이지 재로드 방지)"""
     await _eval(ws, """(function(){
-    var cls = document.querySelector('.tooltip-close');
-    if (cls) { cls.click(); return; }
-    var tip = document.querySelector('.tooltipster-base');
-    if (tip) tip.style.display = 'none';
+    Array.from(document.querySelectorAll('.tooltipster-base, .tooltipster-sidetip'))
+        .forEach(function(el){ el.style.display = 'none'; });
 })()""", cmd_id=9)
 
 
@@ -120,43 +118,40 @@ async def process_row(main_tab, row_idx, name, known_ids):
         return True
 
     async with websockets.connect(main_tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
-        # 잔여 툴팁 닫기
+        # 잔여 툴팁 숨기기
         await close_tooltip(ws)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)
 
-        # STEP 1: 출력물 보기 버튼(ui-id-N) 클릭 → 툴팁 드롭다운 오픈
-        result = await _eval(ws, f"""(function(){{
+        # STEP 1: 출력버튼 클릭 + tooltip-content 선택자 반환
+        tip_sel = await _eval(ws, f"""(function(){{
     var buttons = Array.from(document.querySelectorAll('a[id^="ui-id-"]'));
     var btn = buttons[{row_idx}];
     if (!btn) return 'no_btn';
     btn.scrollIntoView({{block: 'center', behavior: 'instant'}});
     btn.click();
-    return 'clicked:' + btn.id;
+    return btn.getAttribute('data-tooltip-content') || 'no_tipsel';
 }})()""", cmd_id=20)
-        print(f"  출력버튼: {result}")
-        if not result or result == 'no_btn':
+        print(f"  출력버튼: {tip_sel}")
+        if not tip_sel or tip_sel in ('no_btn', 'no_tipsel'):
             print("  버튼 없음"); return False
 
-        # 툴팁 애니메이션 대기
-        await asyncio.sleep(0.8)
+        # tooltip 컨텐츠 로드 대기
+        await asyncio.sleep(1.0)
 
-        # STEP 2: 드롭다운에서 '접수증' 클릭
-        # 클릭 후 fnPrintDclr(...,'Y') 호출 → 새창 오픈
-        result2 = await _eval(ws, """(function(){
-    // title="접수증" 우선, 없으면 innerText "접수증" (visible 한 것만)
-    var candidates = Array.from(document.querySelectorAll('a'))
-        .filter(function(a){
-            var r = a.getBoundingClientRect();
-            if (r.width <= 0 || r.height <= 0) return false;
-            return a.getAttribute('title') === '접수증' ||
-                   (a.innerText||'').trim() === '접수증';
-        });
-    if (!candidates.length) return 'not_found';
-    candidates[0].click();
-    return 'clicked:' + (candidates[0].getAttribute('onclick') || '').slice(0, 50);
+        # STEP 2: 해당 tooltip div 내에서 접수증 클릭 (visible 여부 무관)
+        result2 = await _eval(ws, f"""(function(){{
+    var tipDiv = document.querySelector('{tip_sel}');
+    if (!tipDiv) return 'no_tipdiv';
+    var link = Array.from(tipDiv.querySelectorAll('a'))
+        .find(function(a){{
+            return a.getAttribute('title') === '접수증' || (a.innerText||'').trim() === '접수증';
+        }});
+    if (!link) return JSON.stringify({{err:'no_link', html:tipDiv.innerHTML.slice(0,200)}});
+    link.click();
+    return 'clicked:' + (link.getAttribute('onclick')||'').slice(0, 60);
 })()""", cmd_id=21)
         print(f"  접수증 클릭: {result2}")
-        if result2 == 'not_found':
+        if not result2 or 'no_' in str(result2) or 'err' in str(result2):
             print("  접수증 메뉴 없음"); return False
 
     # STEP 3: OZReport 새창 대기 (최대 20초)
@@ -333,6 +328,7 @@ async def run():
     )
     if os.path.exists(integrity_script):
         print(f"\n혼입검증 자동 실행: {integrity_script}")
+        sys.stdout.flush()  # 다운로드 출력 먼저 터미널에 표시
         subprocess.run([sys.executable, integrity_script, "--fix"], check=False)
     else:
         print(f"\n혼입검증 스크립트 없음 (수동 실행): {integrity_script}")
