@@ -854,6 +854,63 @@ def generate_html(
   </table>
 </div>"""
 
+    # ── 안내문 핵심 정보 요약 블록 ──────────────────────────────────
+    def _ox_badge(val: str) -> str:
+        """O/X 값을 색상 뱃지로"""
+        v = str(val).strip()
+        if v == "O":
+            return '<span style="color:#c62828;font-weight:bold">O</span>'
+        elif v == "X":
+            return '<span style="color:#bbb">X</span>'
+        return f'<span style="color:#999">{v}</span>'
+
+    소득_표시_항목 = [
+        ("이자",      안내문_data.get("이자",      "?")),
+        ("배당",      안내문_data.get("배당",      "?")),
+        ("근로(단일)", 안내문_data.get("근로(단일)", "?")),
+        ("근로(복수)", 안내문_data.get("근로(복수)", "?")),
+        ("연금",      안내문_data.get("연금",      "?")),
+        ("기타",      안내문_data.get("기타",      "?")),
+    ]
+    소득종류_뱃지 = "&nbsp; ".join(
+        f'<span style="font-size:12px;color:#444">{lbl}</span>&nbsp;{_ox_badge(v)}'
+        for lbl, v in 소득_표시_항목
+    )
+
+    장부유형_안내  = 안내문_data.get("기장의무", "—") or "—"
+    추계경비율_안내 = 안내문_data.get("추계경비율", "—") or "—"
+    수입금액_안내  = 안내문_data.get("수입금액")
+    수입금액_str   = f"{수입금액_안내:,}원" if isinstance(수입금액_안내, int) else "—"
+
+    def _red(txt: str) -> str:
+        return f'<span style="color:#c62828;font-weight:bold">{txt}</span>'
+
+    안내문_요약_html = f"""
+<div style="background:#fff5f5;border:2px solid #c62828;border-radius:4px;
+            padding:12px 18px;margin-bottom:10px">
+  <div style="color:#c62828;font-weight:bold;font-size:13px;margin-bottom:8px">
+    📋 안내문 핵심 정보
+  </div>
+  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px">
+    <div>
+      <span style="color:#666;margin-right:4px">소득종류</span>
+      {소득종류_뱃지}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">장부유형</span>
+      {_red(장부유형_안내)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">추계시경비율</span>
+      {_red(추계경비율_안내)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">수입금액</span>
+      {_red(수입금액_str)}
+    </div>
+  </div>
+</div>"""
+
     # 소득종류 누락 검증 → summary-bar 바로 아래 최상단 배치
     소득종류_rows = 섹션별.get("소득종류 누락 검증", [])
     if 소득종류_rows:
@@ -1063,6 +1120,7 @@ def generate_html(
   </div>
 </div>
 
+{안내문_요약_html}
 {소득종류_html}
 
 <div class="section">
