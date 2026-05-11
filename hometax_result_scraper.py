@@ -495,13 +495,9 @@ async def _do_print_to_pdf(ws, dest: Path, name: str) -> bool:
 # ── UTERNAAZ34 신고서 보기 팝업 → 일괄출력 → printToPDF ──────────────
 
 async def _handle_uternaaz34_to_pdf(tab: dict, dest: Path, name: str, skip_39: bool = False) -> bool:
-    """UTERNAAZ34 신고서 보기 팝업:
-    1) window.print() 억제 (일괄출력이 print dialog 열어 탭 freeze 방지)
-    2) 일괄출력 버튼 클릭 → 전체 서식 미리보기 로딩
-    3) 일괄출력 후 새 팝업(프린트 미리보기 창) 감지 → 있으면 새 탭에서 printToPDF
-    4) 새 탭 없으면 → UTERNAAZ34 탭 fresh WebSocket으로 printToPDF
+    """UTERNAAZ34 신고서 보기 팝업 → 일괄출력 → printToPDF
+    (토요일 59085e8 검증 방식 — window.print 억제 없음, 단순 클릭+대기)
     """
-    tab_id = tab["id"]
     ws_url = tab["webSocketDebuggerUrl"]
     try:
         async with websockets.connect(ws_url) as ws:
@@ -513,156 +509,38 @@ async def _handle_uternaaz34_to_pdf(tab: dict, dest: Path, name: str, skip_39: b
                     break
             await asyncio.sleep(1)
 
-            # window.print() 억제 + window.confirm 자동 수락 (UTERNAAZ34 팝업 탭에 별도 적용)
-            await _eval(ws, """
-window.print = function(){};
-window.confirm = function(m){ console.log('[confirm]', m); return true; };
-window.alert   = function(m){ console.log('[alert]', m); };
-window.frames && Array.from(window.frames).forEach(function(f){
-    try{f.print=function(){};f.confirm=function(){return true;};}catch(e){}
-});
-""", cmd_id=12)
-            # Page.handleJavaScriptDialog 자동 수락 활성화
-            await ws.send(json.dumps({"id": 13, "method": "Page.enable", "params": {}}))
-            await asyncio.wait_for(ws.recv(), timeout=5)
-
-            # ── UTERNAAZ39 개인정보 팝업 대기 + 적용 클릭 ──────────────────
-            # skip_39=True → _download_shingoser에서 이미 처리 완료, 여기선 스킵
-            _t39_found = None
-            if not skip_39:
-                logger.info("[%s] UTERNAAZ39 팝업 대기 중 (최대 15초)...", name)
-                for _w in range(30):  # 15초
-                    await asyncio.sleep(0.5)
-                    for _t39 in requests.get(f"http://localhost:{CDP_PORT}/json").json():
-                        if "UTERNAAZ39" in _t39.get("url", ""):
-                            _t39_found = _t39
-                            break
-                    if _t39_found:
-                        break
-            else:
-                logger.info("[%s] UTERNAAZ39 이미 처리됨 → UTERNAAZ34 재로딩 대기 후 일괄출력", name)
-                # 적용 클릭 후 UTERNAAZ34가 reload됨 — readyState + 추가 안정 대기
+            # UTERNAAZ39: skip_39=True이면 outer에서 이미 처리 → UTERNAAZ34 reload 대기
+            if skip_39:
+                logger.info("[%s] UTERNAAZ39 이미 처리됨 → UTERNAAZ34 재로딩 대기", name)
                 for _ in range(20):
                     await asyncio.sleep(0.5)
                     rs = await _eval(ws, "document.readyState", cmd_id=13)
                     if rs == "complete":
                         break
                 await asyncio.sleep(3)
-
-            if _t39_found:
-                logger.info("[%s] UTERNAAZ39 발견 → 적용 클릭", name)
-                try:
-                    async with websockets.connect(_t39_found["webSocketDebuggerUrl"]) as ws39:
-                        # 적용 버튼 최대 8초 폴링
-                        r39 = 'no_btn'
-                        for _btn_try in range(16):
-                            await asyncio.sleep(0.5)
-                            r39 = await _eval(ws39, """(function(){
-    var allEl = Array.from(document.querySelectorAll('*'));
-    var btn = allEl.find(function(el){
-        return (el.value||el.innerText||el.textContent||'').trim() === '적용';
-    });
-    if (!btn) return 'no_btn:' + allEl.length;
-    btn.click(); return 'clicked:적용';
-})()""", cmd_id=50 + _btn_try)
-                            if 'clicked' in str(r39):
-                                break
-                        logger.info("[%s] UTERNAAZ39 적용: %s", name, r39)
-                        await asyncio.sleep(2)
-                except Exception as e:
-                    logger.warning("[%s] UTERNAAZ39 적용 오류: %s", name, e)
-                # 적용 후 UTERNAAZ34 재로딩 대기
-                logger.info("[%s] UTERNAAZ34 재로딩 대기...", name)
-                for _ in range(20):
-                    await asyncio.sleep(0.5)
-                    rs = await _eval(ws, "document.readyState", cmd_id=13)
-                    if rs == "complete":
-                        break
-                await asyncio.sleep(5)
             else:
-                logger.info("[%s] UTERNAAZ39 없음 (개인정보 이미 설정됨) → 바로 일괄출력", name)
+                logger.info("[%s] UTERNAAZ39 없음 → 바로 일괄출력", name)
 
-            # 일괄출력 전 현재 탭 목록 기록
-            tabs_before_ids = {t["id"] for t in requests.get(f"http://localhost:{CDP_PORT}/json").json()}
-
-            # "일괄출력" 버튼 클릭 — 최대 20초 폴링
-            r = 'no_btn'
-            for _jb_try in range(40):  # 20초
-                await asyncio.sleep(0.5)
-                r = await _eval(ws, """(function(){
-    function findBtn(doc) {
-        var b = Array.from(doc.querySelectorAll('input[type=button],button,a'))
-            .find(function(el){ return (el.value||el.innerText||el.textContent||'').trim()==='일괄출력'; });
-        if (b) return b;
-        var frames = doc.querySelectorAll('iframe');
-        for (var i=0;i<frames.length;i++){
-            try{ var found=findBtn(frames[i].contentDocument); if(found) return found; }catch(e){}
-        }
-        return null;
-    }
-    var btn = findBtn(document);
+            # "일괄출력" 버튼 클릭 (토요일 방식 — 단순 1회)
+            r = await _eval(ws, """(function(){
+    var btn = Array.from(document.querySelectorAll('input[type=button],button,a'))
+        .find(function(b){
+            return (b.value||b.innerText||b.textContent||'').trim() === '일괄출력';
+        });
     if (!btn) return 'no_btn:' + document.querySelectorAll('input,button').length;
     btn.click();
     return 'clicked:일괄출력';
-})()""", cmd_id=110 + _jb_try)
-                if r and 'no_btn' not in str(r):
-                    break
+})()""", cmd_id=11)
             logger.info("[%s] 신고서 일괄출력: %s", name, r)
 
             if 'no_btn' in str(r):
                 logger.warning("[%s] 일괄출력 버튼 못 찾음 — 스킵", name)
                 return False
 
-            # 일괄출력 처리 완료 대기 — '확인' 버튼 나타나면 클릭 (최대 180초)
-            # 처리 시작 전 10초 고정 대기 (팝업 렌더링)
-            logger.info("[%s] 일괄출력 처리 중 (최대 180초 대기)...", name)
-            await asyncio.sleep(10)
-            _ilgwal_done = False
-            for _kw in range(340):  # 170초
-                await asyncio.sleep(0.5)
-                r_ka = await _eval(ws, """(function(){
-    var btns = Array.from(document.querySelectorAll('input[type=button],button'))
-        .filter(function(b){
-            if (!b.offsetParent) return false;
-            if (b.disabled) return false;
-            var rc = b.getBoundingClientRect();
-            if (rc.width < 5 || rc.height < 5) return false;
-            var txt = (b.value||b.innerText||b.textContent||'').trim();
-            return txt === '확인';
-        });
-    if (!btns.length) return 'none';
-    btns[0].click();
-    return 'closed:확인';
-})()""", cmd_id=130 + _kw % 100)
-                if r_ka and r_ka != 'none':
-                    logger.info("[%s] 일괄출력 완료 확인 클릭 (%d초 후)", name, 10 + _kw // 2)
-                    await asyncio.sleep(5)  # 페이지 안정화
-                    _ilgwal_done = True
-                    break
-            if not _ilgwal_done:
-                logger.warning("[%s] 일괄출력 확인 모달 미감지 — 강제 진행", name)
-                await asyncio.sleep(10)
+            # 전체 서식 미리보기 로딩 대기 (페이지 수 1→N, 보통 10~20초)
+            logger.info("[%s] 일괄출력 완료 대기 (20초)...", name)
+            await asyncio.sleep(20)
 
-            # 렌더링 완료 → UTERNAAZ34 탭에서 바로 printToPDF (프린터 버튼 불필요)
-            # 탭의 최신 WebSocket URL 재취득
-            new_print_tab = None
-            fresh_tab = None
-            for t in requests.get(f"http://localhost:{CDP_PORT}/json").json():
-                if t["id"] == tab_id:
-                    fresh_tab = t
-                    break
-
-            fresh_ws_url = (fresh_tab or tab).get("webSocketDebuggerUrl", ws_url)
-            if fresh_ws_url != ws_url:
-                logger.info("[%s] UTERNAAZ34 WebSocket URL 변경 → 새 WS로 printToPDF", name)
-                try:
-                    async with websockets.connect(fresh_ws_url) as ws_fresh:
-                        await asyncio.sleep(2)
-                        return await _do_print_to_pdf(ws_fresh, dest, name)
-                except Exception as e:
-                    logger.warning("[%s] fresh WS printToPDF 실패: %s", name, e)
-
-            # 마지막 시도: 기존 ws 사용
             return await _do_print_to_pdf(ws, dest, name)
 
     except Exception as e:
@@ -690,40 +568,27 @@ async def _download_shingoser(
     """
     known_tabs = _get_all_tab_ids()
 
-    # 접수번호 링크 좌표 취득 (A태그 → window.open 트리거를 위해 진짜 마우스 클릭 필요)
-    coords_raw = await _eval(ws_main, f"""(function() {{
+    # 신고서 버튼 클릭 — 토요일(59085e8) 방식: btn.click() eval (뷰포트 밖 행도 정상 동작)
+    clicked = await _eval(ws_main, f"""(function() {{
     var container = document.querySelector('[id*="UTERNAAZ0Z31_wframe"]');
-    if (!container) return null;
+    if (!container) return 'no_container';
     var rows = Array.from(container.querySelectorAll('table tbody tr'))
         .filter(function(tr) {{ return tr.querySelectorAll('td').length >= 13; }});
     var row = rows[{row_idx}];
-    if (!row) return null;
+    if (!row) return 'no_row';
     var tds = Array.from(row.querySelectorAll('td'));
     var cell = tds[{COL_SHINGOSER}];
-    if (!cell) return null;
+    if (!cell) return 'no_cell';
     var btn = cell.querySelector('input[type=button], button, a');
-    if (!btn) return null;
-    var r = btn.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) return null;
-    return JSON.stringify({{
-        x: r.left + r.width / 2, y: r.top + r.height / 2,
-        text: (btn.value || btn.innerText || '').trim().slice(0, 30)
-    }});
+    if (!btn) return 'no_btn:' + cell.innerText.trim().slice(0,20);
+    btn.click();
+    return 'clicked:' + (btn.value || btn.innerText || btn.textContent || '?').trim().slice(0,20);
 }})()""", cmd_id=10 + row_idx)
 
-    if not coords_raw:
-        logger.warning("[%s] 신고서 버튼 좌표 못 찾음 (row=%d)", name, row_idx)
+    if not clicked or 'clicked' not in str(clicked):
+        logger.warning("[%s] 신고서 버튼 없음: %s", name, clicked)
         return False
-    try:
-        coords = json.loads(coords_raw) if isinstance(coords_raw, str) else coords_raw
-        cx, cy = coords["x"], coords["y"]
-    except Exception as e:
-        logger.warning("[%s] 신고서 좌표 파싱 오류: %s / %s", name, e, coords_raw)
-        return False
-
-    logger.info("[%s] 신고서 버튼 클릭 (dispatchMouseEvent %.0f,%.0f): %s",
-                name, cx, cy, coords.get("text", ""))
-    await _dispatch_click_at(ws_main, cx, cy, base_id=430 + row_idx * 10)
+    logger.info("[%s] 신고서 버튼 클릭: %s", name, clicked)
 
     # ── 새 탭 수집 (최대 15초) ──────────────────────────────────────────
     # UTERNAAZ34 발견 후에도 최대 2초(4 polls) 더 대기해 UTERNAAZ39도 잡기
@@ -850,27 +715,39 @@ async def _download_receipt(
     """접수증 보기 버튼(col[12], 빨강버튼) 클릭 → ClipReport → PDF"""
     known_tabs = _get_all_tab_ids()
 
-    clicked = await _eval(ws_main, f"""(function() {{
+    # 버튼 scrollIntoView 후 좌표 취득 (뷰포트 밖 행 대응) → dispatchMouseEvent
+    coords_raw = await _eval(ws_main, f"""(function() {{
     var container = document.querySelector('[id*="UTERNAAZ0Z31_wframe"]');
-    if (!container) return 'no_container';
+    if (!container) return null;
     var rows = Array.from(container.querySelectorAll('table tbody tr'))
         .filter(function(tr) {{ return tr.querySelectorAll('td').length >= 13; }});
     var row = rows[{row_idx}];
-    if (!row) return 'no_row';
+    if (!row) return null;
     var tds = Array.from(row.querySelectorAll('td'));
     var cell = tds[{COL_RECEIPT}];
-    if (!cell) return 'no_cell';
+    if (!cell) return null;
     var btn = cell.querySelector('input[type=button], button');
-    if (!btn) return 'no_btn';
-    btn.click();
-    return 'clicked:' + (btn.value || '?');
+    if (!btn) return null;
+    btn.scrollIntoView({{behavior:'instant', block:'center'}});
+    var r = btn.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return JSON.stringify({{x: r.left + r.width/2, y: r.top + r.height/2, text: (btn.value||'?')}});
 }})()""", cmd_id=30 + row_idx)
 
-    if not clicked or "clicked" not in str(clicked):
-        logger.warning("[%s] 접수증 버튼 없음: %s", name, clicked)
+    if not coords_raw:
+        logger.warning("[%s] 접수증 버튼 없음 또는 좌표 없음", name)
         return False
 
-    logger.info("[%s] 접수증 버튼 클릭: %s", name, clicked)
+    try:
+        coords = json.loads(coords_raw) if isinstance(coords_raw, str) else coords_raw
+        cx, cy = coords["x"], coords["y"]
+    except Exception as e:
+        logger.warning("[%s] 접수증 좌표 파싱 오류: %s", name, e)
+        return False
+
+    await asyncio.sleep(0.3)  # scrollIntoView 안정화 대기
+    logger.info("[%s] 접수증 버튼 클릭 (dispatchMouseEvent %.0f,%.0f): %s", name, cx, cy, coords.get("text",""))
+    await _dispatch_click_at(ws_main, cx, cy, base_id=300 + row_idx * 10)
 
     # ClipReport 탭 대기 (async 폴링)
     cr_tab = await _get_new_tab(known_tabs, timeout_s=30)
@@ -888,7 +765,7 @@ async def _download_receipt(
         logger.warning("[%s] 접수증 clipreport 탭 못 찾음", name)
         return False
 
-    ok = await _download_from_clipreport(cr_tab, dest, name, "접수증")
+    ok = await _print_tab_to_pdf(cr_tab, dest, name, "접수증")
     try:
         requests.get(f"http://localhost:{CDP_PORT}/json/close/{cr_tab['id']}")
     except Exception:
@@ -986,7 +863,7 @@ async def _download_taxbill(
         logger.warning("[%s] %s clipreport 탭 못 찾음", name, label)
         return False
 
-    ok = await _download_from_clipreport(cr_tab, dest, name, label)
+    ok = await _print_tab_to_pdf(cr_tab, dest, name, label)
     try:
         requests.get(f"http://localhost:{CDP_PORT}/json/close/{cr_tab['id']}")
     except Exception:
@@ -1172,36 +1049,9 @@ document.getElementById('{SELECT_ROWNUM}') ? 'open' : 'closed'
         else:
             logger.warning("팝업 SELECT 15초 이상 미감지 — 계속 진행")
 
-        # 3. 날짜는 기본 1개월 그대로 사용 (변경 시 WebSquare 검증 오류 발생)
-        # 1개월 버튼 클릭으로 초기화 (혹시 다른 범위로 되어있을 경우 대비)
-        await _eval(ws, f"""(function() {{
-    var btn = document.getElementById('mf_txppWframe_UTERNAAZ0Z31_wframe_btnSch1Month_UTERNAAZ31');
-    if (btn) {{ btn.click(); return 'clicked_1month'; }}
-    return 'not_found';
-}})()""", cmd_id=3)
-        await asyncio.sleep(1)
-
-        # 4. 100건 보기 + 조회
-        await _set_page_100(ws)
-
-        # 5. 조회완료 알림 닫기 (JS alert 처리 + Enter 키)
-        await asyncio.sleep(1)
-        # JS confirm/alert 자동 닫기 (WebSquare 알림 대비)
-        await _eval(ws, """(function() {
-    // WebSquare 알림 버튼 (확인/닫기) 자동 클릭
-    var confirms = Array.from(document.querySelectorAll("input[value='확인'], button"))
-        .filter(function(el) {
-            var txt = (el.value || el.innerText || '').trim();
-            return txt === '확인' || txt === '닫기';
-        });
-    // 팝업/알림이 있는 경우만
-    confirms.forEach(function(btn) {
-        var r = btn.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) btn.click();
-    });
-    return 'ok';
-})()""", cmd_id=5)
-        await asyncio.sleep(5)  # 조회 결과 로딩 대기 충분히
+        # 3~5. 조회는 사용자가 직접 수행 — 코드는 조회 버튼 절대 클릭 안 함
+        # (재조회 시 화면 리셋되어 오류 발생)
+        await asyncio.sleep(2)
 
         # 6. 데이터 행 수집
         logger.info("데이터 행 수집...")
