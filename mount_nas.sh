@@ -3,7 +3,6 @@
 # LaunchAgent: com.taxeng.nas-mount (2분마다 실행)
 NAS_IP="192.168.0.100"
 LOG="/Users/changmini/종소세2026/mount_nas.log"
-MNT_BASE="/Users/changmini/mnt"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"; }
 
 log "NAS 마운트 시도..."
@@ -19,22 +18,21 @@ if [ -z "$PASS" ]; then log "키체인 비번 없음 — 종료"; exit 1; fi
 
 mount_share() {
     local share="$1"
-    local mnt_path="$MNT_BASE/$share"
 
-    if mount | grep -q "$mnt_path"; then
-        log "$share 이미 마운트됨: $mnt_path"
+    # osascript은 /Volumes/SHARENAME 또는 /Volumes/SHARENAME-1 에 마운트
+    if ls /Volumes/ 2>/dev/null | grep -qi "^${share}"; then
+        log "$share 이미 마운트됨 (/Volumes/)"
         return 0
     fi
 
-    mkdir -p "$mnt_path"
     osascript -e "mount volume \"smb://admin:${PASS}@${NAS_IP}/${share}\"" 2>/dev/null
     sleep 3
 
-    if mount | grep -q "$mnt_path"; then
-        log "$share 마운트 성공: $mnt_path"
+    if ls /Volumes/ 2>/dev/null | grep -qi "^${share}"; then
+        log "$share 마운트 성공 (/Volumes/)"
         return 0
     else
-        log "$share 마운트 실패 (osascript 응답 없음 또는 NAS 거절)"
+        log "$share 마운트 실패"
         return 1
     fi
 }
