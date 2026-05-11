@@ -188,9 +188,13 @@ def make_package(name: str, jumin6: str = "") -> Path | None:
         else:
             print(f"\n  [1] 검증보고서: 없음 — tax_cross_verify.py 먼저 실행")
 
-        # ── 2. 작업판 시트 → PDF ──────────────────────────────────
-        jakup_files = sorted(nfc_glob(folder, "작업판_*.xlsx"),
+        # ── 2. 작업판/작업결과 시트 → PDF ────────────────────────────
+        # 작업결과_*.xlsx 우선, 없으면 작업판_*.xlsx fallback
+        jakup_files = sorted(nfc_glob(folder, "작업결과_*.xlsx"),
                              key=lambda p: p.stat().st_mtime, reverse=True)
+        if not jakup_files:
+            jakup_files = sorted(nfc_glob(folder, "작업판_*.xlsx"),
+                                 key=lambda p: p.stat().st_mtime, reverse=True)
         if jakup_files:
             xlsx = jakup_files[0]
             # xlwings로 시트 목록 확인
