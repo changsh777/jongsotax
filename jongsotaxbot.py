@@ -583,6 +583,11 @@ async def do_work(update: Update, folder: Path, force_jangbu: str = ""):
         if _proj not in _sys.path:
             _sys.path.insert(0, _proj)
         from jakupan_gen import make_jakupan
+        import print_sheet as _ps
+
+        # config.py 가 import 시점에 NAS 미마운트였을 때를 대비해
+        # 이미 검증된 folder.parent 경로로 런타임 패치
+        _ps.CUSTOMER_DIR = folder.parent
 
         parts  = folder.name.rsplit("_", 1)
         _name  = parts[0]
