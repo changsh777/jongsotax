@@ -271,6 +271,23 @@ def parse_tax_return(pdf_path: Path) -> dict:
     result["이자소득금액"] = _income_amt(full, r'이\s*자\s*소\s*득\s*금\s*액')
     result["배당소득금액"] = _income_amt(full, r'배\s*당\s*소\s*득\s*금\s*액')
 
+    # ── 성별 (주민번호 뒷자리 첫 자리) ───────────────────────────────
+    # 세무사랑 신고서: "8 4 0 5 2 5 － 2 0 1 9 6 1 2" 형태 (마스킹 없음)
+    # 패턴: 연속 숫자+공백 6자리 → 구분자 → 첫 번째 자리
+    m_gen = re.search(r'(?:\d\s?){5}\d\s*[－\-]\s*([1-4])', full)
+    if m_gen:
+        gc = int(m_gen.group(1))
+        result["성별"] = "여성" if gc in (2, 4) else "남성"
+    else:
+        result["성별"] = None   # 홈택스 마스킹 등으로 판별 불가
+
+    # ── 부녀자공제 (소득공제 명세서) ────────────────────────────────
+    # "부 녀 자   0" 또는 "부녀자공제 500,000" 형태
+    m_byn = re.search(r'부\s*녀\s*자\s*공?\s*제?\s*([\d,]+)', full)
+    if not m_byn:
+        m_byn = re.search(r'부\s*녀\s*자\s+([\d,]+)', full)
+    result["부녀자공제"] = int(m_byn.group(1).replace(",", "")) if m_byn else None
+
     return result
 
 
@@ -338,6 +355,11 @@ def parse_anneam(pdf_path: Path) -> dict:
     if m_ox:
         for i, label in enumerate(["이자", "배당", "근로(단일)", "근로(복수)", "연금", "기타"]):
             result[label] = m_ox.group(i + 1)
+
+    # ── 증명서류 과소수취 안내 ─────────────────────────────────────
+    # 공백 제거 텍스트에서 탐지 (PDF 줄바꿈으로 "과소수취안" + "내" 분리 대응)
+    text_nsp = re.sub(r'\s', '', text)
+    result["증명서류과소수취"] = "여" if "증명서류과소수취" in text_nsp else "부"
 
     return result
 
@@ -717,6 +739,28 @@ def cross_verify(
             f"[신고서] {소득명}", 신고서_amt if 신고서_amt is not None else "파싱실패",
             상태, 메모=메모, diff=None)
 
+    # ── I. 부녀자공제 체크 (여성 고객만) ─────────────────────────────
+    성별 = 당기신고서.get("성별")          # "여성" / "남성" / None(판별불가)
+    부녀자공제 = 당기신고서.get("부녀자공제")  # int(금액) or None(파싱불가)
+
+    if 성별 == "여성":
+        if 부녀자공제 is None:
+            add("공제 체크", "부녀자공제",
+                "[신고서] 성별", "여성",
+                "[신고서] 부녀자공제", "파싱불가",
+                "warn", "여성 고객 — 부녀자공제 적용 여부 수동 확인", diff=None)
+        elif 부녀자공제 == 0:
+            add("공제 체크", "부녀자공제",
+                "[신고서] 성별", "여성",
+                "[신고서] 부녀자공제", 0,
+                "warn", "부녀자공제 미적용 — 배우자 있거나 부양가족 있는 세대주면 50만원 공제 대상", diff=None)
+        else:
+            add("공제 체크", "부녀자공제",
+                "[신고서] 성별", "여성",
+                "[신고서] 부녀자공제", 부녀자공제,
+                "pass", f"부녀자공제 {부녀자공제:,}원 적용됨", diff=None)
+    # 남성 또는 성별 판별불가 → 체크 생략
+
     return results
 
 
@@ -933,70 +977,83 @@ def generate_html(
     납부_str   = _납부_fmt(_납부)
     납부_color = "#2e7d32" if isinstance(_납부, int) and _납부 < 0 else "#c62828"
 
-    # 전기 납부(환급)세액
+    # 전기 수입금액 / 소득률 / 기납부세액 / 납부(환급)세액
+    _전기rev = 전기신고서.get("총수입금액") if 전기신고서 else None
+    _전기inc = 전기신고서.get("소득금액") if 전기신고서 else None
+    _전기기납부 = 전기신고서.get("기납부세액") if 전기신고서 else None
+    전기수입금액_str = f"{_전기rev:,}원" if isinstance(_전기rev, int) else "—"
+    전기소득률_str  = f"{_전기inc / _전기rev * 100:.1f}%" if _전기rev and _전기inc else "—"
+    전기기납부_str  = f"{_전기기납부:,}원" if isinstance(_전기기납부, int) else "—"
     _전기납부 = 전기신고서.get("납부세액") if 전기신고서 else None
     전기납부_str   = _납부_fmt(_전기납부)
     전기납부_color = "#2e7d32" if isinstance(_전기납부, int) and _전기납부 < 0 else "#c62828"
+    전기_yr_label  = str(전기신고서.get("귀속연도", "전기")) if 전기신고서 else ""
+
+    # 증명서류 과소수취 안내
+    과소수취_여부 = 안내문_data.get("증명서류과소수취", "부")
 
     def _red(txt: str) -> str:
         return f'<span style="color:#c62828;font-weight:bold">{txt}</span>'
 
+    당기_yr_label = str(당기신고서.get("귀속연도", "당기"))
+
+    # 증명서류 과소수취 경고 블록
+    if 과소수취_여부 == "여":
+        _과소수취_html = (
+            '  <div style="margin-top:6px;padding:5px 10px;background:#fff0f0;'
+            'border-left:3px solid #c62828;border-radius:2px;font-size:12px">'
+            '<span style="color:#c62828;font-weight:bold">! 증명서류 과소수취 안내 있음</span>'
+            '<span style="color:#888;margin-left:8px">'
+            '&mdash; 수취 대상 경비 vs 국세청 보유 자료 금액 차이 5천만원 이상. '
+            '필요경비 불공제&middot;가산세 위험 확인 필요</span></div>'
+        )
+    else:
+        _과소수취_html = ""
+
+    # 전기 행 (전기신고서 있을 때만) — 당기와 동일 스타일, 라벨만 회색
+    _전기_행 = ""
+    if 전기신고서:
+        _전기_행 = (
+            f'  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;'
+            f'font-size:13px;margin-top:6px">'
+            f'<span style="color:#888;font-size:12px;font-weight:bold;min-width:40px">'
+            f'전기({전기_yr_label})</span>'
+            f'<div><span style="color:#666;margin-right:3px">수입금액</span>'
+            f'<span style="color:#444;font-weight:bold">{전기수입금액_str}</span></div>'
+            f'<div><span style="color:#666;margin-right:3px">소득률</span>'
+            f'<span style="color:#444;font-weight:bold">{전기소득률_str}</span></div>'
+            f'<div><span style="color:#666;margin-right:3px">기납부세액</span>'
+            f'<span style="color:#444;font-weight:bold">{전기기납부_str}</span></div>'
+            f'<div><span style="color:#666;margin-right:3px">납부(환급)</span>'
+            f'<span style="color:{전기납부_color};font-weight:bold">{전기납부_str}</span></div>'
+            f'</div>'
+        )
+
     안내문_요약_html = f"""
 <div style="background:#fff5f5;border:2px solid #c62828;border-radius:4px;
-            padding:12px 18px;margin-bottom:10px">
+            padding:12px 16px;margin-bottom:10px">
   <div style="color:#c62828;font-weight:bold;font-size:13px;margin-bottom:8px">
     📋 안내문 핵심 정보
   </div>
-  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:8px">
-    <div>
-      <span style="color:#666;margin-right:4px">성명</span>
-      {_red(name)}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">업종코드</span>
-      {_red(업종코드_str)}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">사업자번호</span>
-      {_red(사업자번호_str)}
-    </div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:6px">
+    <div><span style="color:#666;margin-right:4px">성명</span>{_red(name)}</div>
+    <div><span style="color:#666;margin-right:4px">업종코드</span>{_red(업종코드_str)}</div>
+    <div><span style="color:#666;margin-right:4px">사업자번호</span>{_red(사업자번호_str)}</div>
   </div>
-  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:8px">
-    <div>
-      <span style="color:#666;margin-right:4px">소득종류</span>
-      {소득종류_뱃지}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">장부유형</span>
-      {_red(장부유형_안내)}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">추계시경비율</span>
-      {_red(추계경비율_안내)}
-    </div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:6px">
+    <div><span style="color:#666;margin-right:4px">소득종류</span>{소득종류_뱃지}</div>
+    <div><span style="color:#666;margin-right:4px">장부유형</span>{_red(장부유형_안내)}</div>
+    <div><span style="color:#666;margin-right:4px">추계시경비율</span>{_red(추계경비율_안내)}</div>
   </div>
-  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px">
-    <div>
-      <span style="color:#666;margin-right:4px">수입금액</span>
-      {_red(수입금액_str)}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">소득률</span>
-      {_red(소득률_str)}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">기납부세액</span>
-      {_red(기납부_str)}
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">납부(환급)</span>
-      <span style="color:{납부_color};font-weight:bold">{납부_str}</span>
-    </div>
-    <div>
-      <span style="color:#666;margin-right:4px">전기납부(환급)</span>
-      <span style="color:{전기납부_color};font-weight:bold">{전기납부_str}</span>
-    </div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-size:13px">
+    <span style="color:#c62828;font-size:12px;font-weight:bold;min-width:40px">당기({당기_yr_label})</span>
+    <div><span style="color:#666;margin-right:3px">수입금액</span>{_red(수입금액_str)}</div>
+    <div><span style="color:#666;margin-right:3px">소득률</span>{_red(소득률_str)}</div>
+    <div><span style="color:#666;margin-right:3px">기납부세액</span>{_red(기납부_str)}</div>
+    <div><span style="color:#666;margin-right:3px">납부(환급)</span><span style="color:{납부_color};font-weight:bold">{납부_str}</span></div>
   </div>
+{_전기_행}
+{_과소수취_html}
 </div>"""
 
     # 소득종류 누락 검증 → summary-bar 바로 아래 최상단 배치
@@ -1288,6 +1345,21 @@ def run(name: str, jumin6: str = "", folder: Path = None) -> Path | None:
             seen_yr[yr] = sr
 
     신고서_list = sorted(seen_yr.values(), key=lambda s: s.get("귀속연도", 0))
+
+    # 성별·부녀자공제는 파일마다 파싱 위치가 달라 분산됨
+    # → 모든 raw 파일에서 찾은 값 중 첫 번째 유효값을 당기신고서에 주입
+    if 신고서_list:
+        당기 = 신고서_list[-1]
+        if 당기.get("성별") not in ("여성", "남성"):
+            for sr in raw_신고서:
+                if sr.get("성별") in ("여성", "남성"):
+                    당기["성별"] = sr["성별"]
+                    break
+        if 당기.get("부녀자공제") is None:
+            for sr in raw_신고서:
+                if sr.get("부녀자공제") is not None:
+                    당기["부녀자공제"] = sr["부녀자공제"]
+                    break
 
     # 파일 인식 출력 (신고서는 중복 제거 후만 표시)
     dedup_신고서_names = {sr["파일"] for sr in 신고서_list}
