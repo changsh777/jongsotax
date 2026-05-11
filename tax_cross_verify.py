@@ -916,6 +916,28 @@ def generate_html(
     업종코드_str   = str(당기신고서.get("업종코드", "") or "—").strip() or "—"
     사업자번호_str  = str(당기신고서.get("사업자번호", "") or "—").strip() or "—"
 
+    # 소득률 (소득금액 / 총수입금액)
+    _rev = 당기신고서.get("총수입금액")
+    _inc = 당기신고서.get("소득금액")
+    소득률_str = f"{_inc / _rev * 100:.1f}%" if _rev and _inc else "—"
+
+    # 기납부세액
+    _기납부 = 당기신고서.get("기납부세액")
+    기납부_str = f"{_기납부:,}원" if isinstance(_기납부, int) else "—"
+
+    # 납부(환급)세액 — 음수면 환급
+    _납부 = 당기신고서.get("납부세액")
+    def _납부_fmt(v):
+        if not isinstance(v, int): return "—"
+        return f"환급 {abs(v):,}원" if v < 0 else f"납부 {v:,}원"
+    납부_str   = _납부_fmt(_납부)
+    납부_color = "#2e7d32" if isinstance(_납부, int) and _납부 < 0 else "#c62828"
+
+    # 전기 납부(환급)세액
+    _전기납부 = 전기신고서.get("납부세액") if 전기신고서 else None
+    전기납부_str   = _납부_fmt(_전기납부)
+    전기납부_color = "#2e7d32" if isinstance(_전기납부, int) and _전기납부 < 0 else "#c62828"
+
     def _red(txt: str) -> str:
         return f'<span style="color:#c62828;font-weight:bold">{txt}</span>'
 
@@ -939,7 +961,7 @@ def generate_html(
       {_red(사업자번호_str)}
     </div>
   </div>
-  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px">
+  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:8px">
     <div>
       <span style="color:#666;margin-right:4px">소득종류</span>
       {소득종류_뱃지}
@@ -952,9 +974,27 @@ def generate_html(
       <span style="color:#666;margin-right:4px">추계시경비율</span>
       {_red(추계경비율_안내)}
     </div>
+  </div>
+  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center;font-size:13px">
     <div>
       <span style="color:#666;margin-right:4px">수입금액</span>
       {_red(수입금액_str)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">소득률</span>
+      {_red(소득률_str)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">기납부세액</span>
+      {_red(기납부_str)}
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">납부(환급)</span>
+      <span style="color:{납부_color};font-weight:bold">{납부_str}</span>
+    </div>
+    <div>
+      <span style="color:#666;margin-right:4px">전기납부(환급)</span>
+      <span style="color:{전기납부_color};font-weight:bold">{전기납부_str}</span>
     </div>
   </div>
 </div>"""
