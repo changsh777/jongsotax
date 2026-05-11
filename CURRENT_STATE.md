@@ -1,5 +1,5 @@
 # 종소세 2026 현재 상태
-> 마지막 업데이트: 2026-05-02 (incometaxbot Windows 전환)
+> 마지막 업데이트: 2026-05-11
 
 ---
 
@@ -11,14 +11,35 @@
 |------|------|
 | 코드 개발·테스트 | Windows 데스크탑 F:\종소세2026 |
 | 24시간 실행 센터 | Mac Mini ~/종소세2026 |
-| NAS 저장소 | Z:\종소세2026\고객\ |
+| NAS 저장소 | Z:\종소세2026\고객\ (Mac Mini: /Volumes/장성환 또는 /Volumes/장성환-1) |
 
-## Git Repo 구조
-| Repo | 용도 |
-|------|------|
-| changsh777/jongsotax | 종소세 자동화 전체 (데스크탑+맥미니 공유) |
-| changsh777/taxbot-automation | 부가세·원천세 봇 (~/taxbot/) |
-| changsh777/macmini-bots | 맥미니 텔레그램 봇·크론 스크립트 모음 |
+---
+
+## 안내문 수집 Track 구분
+
+### Track A — 수임동의 완료 고객 (세무대리인 계정으로 일괄 조회)
+- 스크립트: `step4_full.py`
+- 세무사 사무소 인증서 계정으로 홈택스 일괄 다운로드
+- ⚠️ 계정잠금 위험 — 자동 실행 금지, 수동만
+
+### Track B — 신규 고객 (고객 개인 ID/PW로 직접 로그인)
+- 스크립트: `step5_individual.py`
+- 구글시트 접수명단 col30(홈택스아이디) / col31(홈택스비번) 읽기
+- PDF없는 고객만 자동 필터링
+- 실행 전 `restart_edge_cdp.bat` 으로 Edge CDP(localhost:9222) 먼저 시작
+
+**Track B 실행 순서:**
+```
+1. restart_edge_cdp.bat 더블클릭 (Edge CDP 시작)
+2. cd F:\종소세2026
+3. python step5_individual.py
+   → 구글시트에서 홈택스ID/PW 있고 PDF없는 고객 자동 추출
+   → Edge로 홈택스 로그인 → 안내문 PDF 다운로드 → parse_anneam() → 구글시트 업데이트
+```
+
+### 1명 단독 처리
+- `python step6_one_shot.py --name 홍길동 --jumin 000000-0000000 --id ht_id --pw ht_pw`
+- 또는 `_run_one.py` (PDF없을 때 수동)
 
 ---
 
@@ -26,45 +47,39 @@
 
 | 파일 | 역할 | 상태 |
 |------|------|------|
-| `신규고객처리.py` | 고객구분=신규: 고객 ID/PW 로그인 → PDF 다운 | ✅ 작동 |
-| `기존고객처리.py` | 고객구분=기존: 세무사 인증서 로그인 → PDF 다운 | ⚠️ 계정잠금 위험 - 수동만 |
+| `step5_individual.py` | Track B batch: 구글시트 ID/PW → Edge → 안내문 PDF 다운+파싱 | ✅ 작동 |
+| `step6_one_shot.py` | Track B 1명: CLI --name --jumin --id --pw | ✅ 작동 |
+| `step4_full.py` | Track A batch: 세무대리인 계정 일괄 조회 | ⚠️ 계정잠금 위험 - 수동만 |
 | `parse_and_sync_신규.py` | PDF → parse_anneam → 파싱결과.xlsx + 구글시트 | ✅ 작동 |
+| `tax_cross_verify.py` | 교차검증 HTML 보고서 생성 (검증보고서_*.html) | ✅ 작동 |
+| `print_package.py` | 출력패키지 PDF 생성 (검증보고서+작업결과+안내문+신고서) | ✅ 작동 |
 | `airtable_sync_mac.py` | 에어테이블→구글시트 1분 자동싱크 (맥미니 크론) | ✅ 작동 |
-| `show_status.py` | 전체 고객 처리 현황 출력 | ✅ 작동 |
-| `incometaxbot.py` | Telegram봇 @incometax777_bot — 신규접수 감지→파싱 자동화 **(Mac Mini 실행)** | ✅ 완성 |
-| `_run_one.py` | PDF 없을 때 Windows에서 수동 실행 — Edge CDP 다운+파싱 1명 처리 | ✅ 완성 |
-| `kakao_bank_monitor.py` | 카카오뱅크 입금 알림(winsdk 토스트) 감지 → 구글시트 입금체크 업데이트 **(Windows 전용)** | ✅ 완성 |
+| `jongsotaxbot.py` | 텔레그램 봇 — 직원용 작업 자동화 **(Mac Mini LaunchAgent)** | ✅ 작동 |
+| `kakao_bank_monitor.py` | 카카오뱅크 입금 감지 → 구글시트 입금체크 **(Windows 전용)** | ✅ 작동 |
 
 ---
 
-## 신규 고객 처리 현황 (2026-05-02 기준)
+## 안내문 수집 현황 (2026-05-11 기준)
 
-### ✅ 완료 (PDF + 파싱 + 구글시트)
-| 이름 | 수입 | 비고 |
-|------|------|------|
-| 신정숙 | 34,814,000 | 간편장부 / 기준경비율 |
-| 한효성 | 42,413,744 | 간편장부 / 기준경비율 (기존고객이지만 ID/PW로 처리) |
-
-### ❌ 미처리
-| 이름 | 메모 |
+### ❌ PDF없음 — 처리 필요 (ID/PW 있음, 12명)
+| 이름 | 비고 |
 |------|------|
-| 정도민 | 홈택스 아이디 있음 |
-| 김태윤 | 홈택스 아이디 있음 |
-| 지성호 | 홈택스 아이디 있음 |
-| 김경필 | 홈택스 아이디 있음 |
-| 이재윤 | 홈택스 아이디 있음 |
-| 유영주 | 홈택스 자료 없음 (소득 없을 가능성) |
+| 정도민 | |
+| 마금현 | |
+| 김진곤 | |
+| 지성호 | |
+| 배성섭 | |
+| 김혜수 | |
+| 박성권(KYS) | |
+| 황예리(KYS) | |
+| 김인덕 | |
+| 박수춘 | |
+| 장기요 | 신규 |
+| 김경오 | 신규 |
 
----
+→ `python step5_individual.py` 실행하면 위 12명 자동 처리
 
-## 기존 고객 처리 현황
-
-### PDF 있는 것
-- 김병수, 채민희, 이민수, 이명회, 한효성
-
-### 수입 없음 → PDF 미처리
-- 마금현, 김진곤, 이윤경, 양태석, 장은향, 한두열, 진현오, 고홍, REEVE SAMANTHA EMMA
-- 장성환(본인), 박수경 = 홈택스 아이디 없음
+### ✅ PDF있음: 210명 (Track A/B 완료)
 
 ---
 
@@ -85,27 +100,8 @@ page.evaluate("document.getElementById('menuAtag_4103080000').onclick()")
 
 ### ❌ 금지
 - `page.goto(tmIdx URL)` → "로그인 정보가 없습니다"
-- caller에서 stdout 이중 래핑 → 신규고객처리.py import 충돌
-- 기존고객처리.py 자동 실행 → 계정잠금 위험 (어제 발생)
-
----
-
-## incometaxbot 실행 방법 (Windows 데스크탑)
-
-```
-# 터미널에서:
-cd F:\종소세2026
-python incometaxbot.py
-
-# Edge CDP는 PDF 다운로드 필요할 때만 미리 열어두기:
-python launch_edge.py
-```
-
-**흐름 요약:**
-- n8n → Telegram "@incometax777_bot" 채팅 → "홍길동님 신규 접수되었습니다."
-- 봇이 구글시트 조회 → NAS PDF 확인
-- PDF 있음 → parse_and_sync_신규.py 직접 실행 (Edge 불필요)
-- PDF 없음 → _run_one.py 서브프로세스 → Edge CDP 로그인+다운+파싱
+- caller에서 stdout 이중 래핑 → import 충돌
+- Track A(세무대리인) 자동 실행 → 계정잠금 위험
 
 ---
 
@@ -116,14 +112,13 @@ python launch_edge.py
 
 ---
 
-## 다음 할 일
-1. 신규 미처리 고객 건바이건 처리 (정도민·김태윤·지성호·김경필·이재윤)
-2. 기존 고객 PDF — 세무사 수동 로그인 방식으로 조심히
-3. jongsotaxbot.py 6/1 종료 처리
-
----
-
 ## 구글시트
 - ID: `1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI`
-- 시트: `접수명단`
-- 에어테이블 1분 싱크 → Mac Mini 크론 (`~/airtable_sync.log` 로그)
+- 접수명단 시트 (gid=245653883): col30=홈택스아이디, col31=홈택스비번
+- 에어테이블 1분 싱크 → Mac Mini 크론 (`~/airtable_sync.log`)
+
+## NAS
+- IP: `192.168.0.100` (DS920+)
+- SMB 계정: `admin` (changmini 아님)
+- Mac Mini 마운트: `/Volumes/장성환`, `/Volumes/장성환-1`
+- HDD 절전: **없음** (2026-05-11 비활성화 — 봇 SMB 연결 안정화)
