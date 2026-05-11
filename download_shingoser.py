@@ -149,6 +149,11 @@ async def process_row(main_tab, row_idx, name, acpt, known_ids):
     print(f"\n{'='*60}")
     print(f"  처리: {name} / 접수번호: {acpt} (행 {row_idx})")
 
+    # 이미 파일 있으면 스킵
+    if os.path.exists(dst):
+        print(f"  [{name}] 파일 이미 존재 — 스킵")
+        return True
+
     # STEP 1: 접수번호 클릭
     async with websockets.connect(main_tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
         ok = await pyclick(ws, main_tab["id"], f"""(function(){{
@@ -156,7 +161,7 @@ async def process_row(main_tab, row_idx, name, acpt, known_ids):
         .filter(function(tr){{ return tr.querySelectorAll('td').length >= 13; }});
     var cell = rows[{row_idx}] && rows[{row_idx}].querySelectorAll('td')[{ACPT_COL}];
     return cell && cell.querySelector('a,input[type=button],button');
-}})()""", label="접수번호", cmd_id=20)
+}})()""", label="접수번호", cmd_id=20, scroll=True)
         if not ok:
             print("  접수번호 버튼 없음"); return False
 

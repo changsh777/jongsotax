@@ -521,7 +521,9 @@ async def _handle_uternaaz34_to_pdf(tab: dict, dest: Path, name: str, skip_39: b
             else:
                 logger.info("[%s] UTERNAAZ39 없음 → 바로 일괄출력", name)
 
-            # "일괄출력" 버튼 클릭 (토요일 방식 — 단순 1회)
+            # "일괄출력" 버튼 클릭 + 즉시 window.print() 억제
+            # 클릭→서식로딩(비동기) → window.print() 호출 전에 억제 → OS 다이얼로그 방지
+            # 서식 로딩 자체는 클릭 핸들러 안에서 비동기로 진행되므로 억제와 무관
             r = await _eval(ws, """(function(){
     var btn = Array.from(document.querySelectorAll('input[type=button],button,a'))
         .find(function(b){
@@ -529,6 +531,8 @@ async def _handle_uternaaz34_to_pdf(tab: dict, dest: Path, name: str, skip_39: b
         });
     if (!btn) return 'no_btn:' + document.querySelectorAll('input,button').length;
     btn.click();
+    // 클릭 직후 window.print 억제 — 서식 로딩은 이미 시작됨, OS 다이얼로그만 막음
+    window.print = function(){ console.log('[print suppressed after batch click]'); };
     return 'clicked:일괄출력';
 })()""", cmd_id=11)
             logger.info("[%s] 신고서 일괄출력: %s", name, r)
