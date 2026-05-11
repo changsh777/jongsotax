@@ -14,10 +14,13 @@ ENV = os.environ.get("SEOTAX_ENV", "local")
 # ----- 경로 정의 -----
 if platform.system() == "Darwin":
     # 맥미니 — NAS SMB 마운트 (마운트 위치 자동탐지)
+    # /Volumes/장성환*/종소세2026 패턴으로 glob 탐색 (장성환-1, 장성환-2 등 번호 변동 대응)
+    import glob as _glob
+    _glob_hits = sorted(_glob.glob("/Volumes/장성환*/종소세2026"))
     _candidates = [
-        Path("/Volumes/장성환/종소세2026"),
-        Path("/Volumes/장성환-1/종소세2026"),
-        Path("/Users/changmini/mnt/장성환/종소세2026"),
+        *[Path(p) for p in _glob_hits],          # glob 결과 우선
+        Path("/Users/changmini/mnt/장성환/종소세2026"),  # 수동 마운트 폴백
+        Path("/Volumes/장성환/종소세2026"),           # 최후 폴백 (없어도 시작)
     ]
     BASE = next((p for p in _candidates if p.exists()), Path("/Volumes/장성환/종소세2026"))
 elif ENV == "nas":

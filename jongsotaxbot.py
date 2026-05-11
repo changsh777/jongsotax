@@ -1109,6 +1109,25 @@ def wait_for_nas(path: Path, timeout: int = 60) -> bool:
     return False
 
 
+# ===== /restart =====
+async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """git pull 후 봇 프로세스 재시작 (관리자 전용)"""
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ 관리자 전용 명령입니다.")
+        return
+    await update.message.reply_text("🔄 git pull 후 재시작 중...")
+    import subprocess, sys, os
+    proj = str(Path(__file__).resolve().parent)
+    try:
+        r = subprocess.run(["git", "-C", proj, "pull"], capture_output=True, text=True, timeout=30)
+        out = (r.stdout + r.stderr).strip()
+        await update.message.reply_text(f"git pull: {out[:300]}")
+    except Exception as e:
+        await update.message.reply_text(f"git pull 실패: {e}")
+    # 현재 프로세스를 같은 Python + 인자로 교체 (봇 재시작)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 # ===== 메인 =====
 def main():
     acquire_pid_lock("jongsotaxbot")
@@ -1131,6 +1150,7 @@ def main():
     app.add_handler(CommandHandler("agree",   cmd_status))        # /agree 강동수
     app.add_handler(CommandHandler("send",    cmd_send))          # /send 강동수
     app.add_handler(CommandHandler("pkg",     cmd_pkg))           # /pkg 강동수 (출력패키지 재생성)
+    app.add_handler(CommandHandler("restart", cmd_restart))       # /restart (git pull + 재시작)
     app.add_handler(MessageHandler(filters.Document.ALL,            handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
