@@ -119,6 +119,28 @@ def classify_files(folder: Path) -> dict:
 # 2. 파싱 함수
 # ═══════════════════════════════════════════════════════════════════
 
+def _join_broken_nums(text: str) -> str:
+    """홈택스 PDF 줄바꿈으로 잘린 숫자 합치기.
+    '148,477,14\\n5' → '148,477,145'
+    조건: 현재 줄이 숫자로 끝나고 다음 줄이 순수 숫자(쉼표·공백 없음)만인 경우.
+    완전한 숫자 두 개(예: '1,000,000\\n50,000')는 합치지 않음.
+    """
+    lines = text.split('\n')
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ''
+        # 다음 줄이 순수 연속 숫자(쉼표·공백 없이)이고 현재 줄이 숫자로 끝날 때만 합침
+        if nxt and re.match(r'^\d+$', nxt) and re.search(r'\d$', line.rstrip()):
+            out.append(line.rstrip() + nxt)
+            i += 2
+        else:
+            out.append(line)
+            i += 1
+    return '\n'.join(out)
+
+
 def parse_tax_return(pdf_path: Path) -> dict:
     """신고서 PDF → 주요 수치 dict
     keys: 귀속연도, 업종코드, 총수입금액, 필요경비, 소득금액,
@@ -129,9 +151,11 @@ def parse_tax_return(pdf_path: Path) -> dict:
     try:
         with pdfplumber.open(pdf_path) as pdf:
             all_pages = [unicodedata.normalize("NFC", pg.extract_text() or "") for pg in pdf.pages]
+            # 줄바꿈 잘린 숫자 전처리 (홈택스 PDF 1억+ 단위 오류 방지)
+            all_pages = [_join_broken_nums(pg) for pg in all_pages]
             p1 = all_pages[0] if len(all_pages) > 0 else ""
             p2 = all_pages[1] if len(all_pages) > 1 else ""
-            full = "\n".join(all_pages)   # 소득종류 섹션 위치 불규칙 → 전체 검색
+            full = "\n".join(all_pages)   # 소득종류·사업소득 섹션 위치 불규칙 → 전체 검색
     except Exception as e:
         result["오류"] = str(e)
         return result
@@ -156,8 +180,8 @@ def parse_tax_return(pdf_path: Path) -> dict:
     m_gij = re.search(r'기\s*장\s*의\s*무.*?(간편장부대상자|복식부기의무자)', p1)
     result["기장의무"] = m_gij.group(1) if m_gij else ""
 
-    # 업종코드 (p2) — 기호와 한글 사이 공백 대응
-    m_up = re.search(r'⑧\s*주\s*업\s*종\s*코\s*드\s*([\d]{6})', p2)
+    # 업종코드 (사업소득 페이지) — 위치 불규칙 → full 검색
+    m_up = re.search(r'⑧\s*주\s*업\s*종\s*코\s*드\s*([\d]{6})', full)
     result["업종코드"] = m_up.group(1) if m_up else ""
 
     def _parse_multi_col(raw: str) -> int | None:
@@ -173,16 +197,16 @@ def parse_tax_return(pdf_path: Path) -> dict:
             return nums_int[-1]   # 합계열 있음
         return sum(nums_int)      # 합계열 없음 → 전체 합산
 
-    # 총수입금액 (p2 ⑨)
-    m_rev = re.search(r'⑨\s*총\s*수\s*입\s*금\s*액([^\n]+)', p2)
+    # 총수입금액 ⑨ — 사업소득명세서 위치 불규칙(이자/배당 명세서가 먼저 오는 경우 등) → full 검색
+    m_rev = re.search(r'⑨\s*총\s*수\s*입\s*금\s*액([^\n]+)', full)
     result["총수입금액"] = _parse_multi_col(m_rev.group(1)) if m_rev else None
 
-    # 필요경비 (p2 ⑩)
-    m_exp = re.search(r'⑩\s*필\s*요\s*경\s*비([^\n]+)', p2)
+    # 필요경비 ⑩ → full 검색
+    m_exp = re.search(r'⑩\s*필\s*요\s*경\s*비([^\n]+)', full)
     result["필요경비"] = _parse_multi_col(m_exp.group(1)) if m_exp else None
 
-    # 소득금액 ⑪
-    m_inc = re.search(r'⑪\s*소\s*득\s*금\s*액([^\n]+)', p2)
+    # 소득금액 ⑪ → full 검색 (없으면 p1 종합소득금액으로 fallback)
+    m_inc = re.search(r'⑪\s*소\s*득\s*금\s*액([^\n]+)', full)
     if m_inc:
         result["소득금액"] = _parse_multi_col(m_inc.group(1))
     else:
@@ -253,6 +277,9 @@ def parse_anneam(pdf_path: Path) -> dict:
         with pdfplumber.open(pdf_path) as pdf:
             text = "\n".join(p.extract_text() or "" for p in pdf.pages)
             text0 = pdf.pages[0].extract_text() or ""
+        # 줄바꿈 잘린 숫자 전처리 (홈택스 안내문 1억+ 단위 오류 방지)
+        text  = unicodedata.normalize("NFC", _join_broken_nums(text))
+        text0 = unicodedata.normalize("NFC", _join_broken_nums(text0))
     except Exception:
         return result
 
