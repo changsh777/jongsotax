@@ -774,7 +774,7 @@ def cross_verify(
     ann_연금납입 = 안내문.get("연금계좌세액공제")   # 안내문 납입액
     신고서_연금납입 = 당기신고서.get("연금계좌납입액")    # 신고서 276번 납입액
 
-    if ann_연금납입 is not None:
+    if ann_연금납입 is not None and ann_연금납입 > 0:   # 0원이면 체크 불필요
         if 신고서_연금납입 is None:
             add("공제 체크", "연금계좌세액공제",
                 "[안내문] 납입액", ann_연금납입,
