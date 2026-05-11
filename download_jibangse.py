@@ -1,29 +1,26 @@
 # -*- coding: utf-8 -*-
 # 위택스 지방소득세 접수증 일괄 PDF 다운로드
-# pure CDP (pyautogui 없음) — Page.printToPDF 방식
-# 마우스 자유 사용 가능
+# pure CDP (pyautogui 없음) — Page.printToPDF 방식 → 마우스 자유 사용 가능
 #
-# 전제: 위택스 신고내역 화면이 열린 상태에서 실행
+# 전제: 위택스 지방소득세 신고내역 화면이 열린 상태에서 실행
 #   URL: https://www.wetax.go.kr/etr/lit/b0702/B070202M01.do
+#
+# 테이블 구조 (DOM 확인 결과):
+#   - tblMain 내부 각 행: <tr> 10td (td[1]=납세자명, td[8]=출력버튼 ui-id-N)
+#   - 출력버튼 클릭 → tooltipster 드롭다운 → 접수증(title="접수증") 클릭 → OZReport 새창
+#   - 페이지네이션: a[href="#n"] .active = 현재페이지, 다음 숫자 클릭
 #
 # 저장: Z:\종소세2026\고객\{name}_{jumin6}\발송용\{name}_지방세접수증.pdf
 # 완료 후: verify_folder_integrity.py --fix 자동 실행
 import sys, os, io
-# stdout UTF-8 강제 (Windows cp949 환경 대비)
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-import requests, json, asyncio, websockets, time, shutil, traceback, unicodedata, base64, subprocess
+import requests, json, asyncio, websockets, shutil, traceback, unicodedata, base64, subprocess
 from datetime import datetime
 
 CDP        = "http://localhost:9222"
 NAS_BASE   = r"Z:\종소세2026\고객"
 LOCAL_BASE = r"C:\Users\pc\종소세2026"
-
-# 위택스 신고내역 테이블 컬럼 (0-based)
-# -, 납세자명, 신고일자, 관할자치단체, 금액, 진행상태, 납부기한, 납부여부, 출력(📋), 신고구분
-NAME_COL  = 1
-PRINT_COL = 8
-MIN_COLS  = 9   # 데이터 행 최소 td 수
 
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -78,49 +75,37 @@ async def _eval(ws, code, cmd_id=1):
     return r.get("result", {}).get("result", {}).get("value")
 
 
-# ── 테이블 행 파싱 ────────────────────────────────────────────────────────────
+# ── 행 목록 파싱 ──────────────────────────────────────────────────────────────
+# DOM 구조: tblMain 내 각 <tr>에 10개 td
+#   td[0]=납부여부(-)  td[1]=납세자명  td[2]=신고일자  td[3]=관할자치단체
+#   td[4]=금액  td[5]=진행상태  td[6]=납부기한  td[7]=empty
+#   td[8]=출력물보기(a[id="ui-id-N"])  td[9]=신고구분
 
 async def get_rows(ws):
-    """현재 페이지 데이터 행 목록 반환"""
-    raw = await _eval(ws, f"""JSON.stringify(
-    (function(){{
-        var allRows = Array.from(document.querySelectorAll('table tbody tr'));
-        var dataRows = allRows.filter(function(tr){{
-            return tr.querySelectorAll('td').length >= {MIN_COLS};
-        }});
-        return dataRows.map(function(tr){{
-            var tds = tr.querySelectorAll('td');
-            var name = (tds[{NAME_COL}] || {{}}).innerText || '';
-            return {{ name: name.trim() }};
-        }}).filter(function(r){{ return r.name.length > 0; }});
-    }})()
-)""", cmd_id=5)
+    """현재 페이지 행 목록 반환 [{name, btn_id}]"""
+    raw = await _eval(ws, """JSON.stringify((function(){
+    var buttons = Array.from(document.querySelectorAll('a[id^="ui-id-"]'));
+    return buttons.map(function(btn){
+        var tr  = btn.closest("tr");
+        var tds = tr ? tr.querySelectorAll("td") : [];
+        var name = (tds[1] || {}).innerText || "";
+        return { name: name.trim(), btn_id: btn.id };
+    }).filter(function(r){ return r.name.length > 0; });
+})())""", cmd_id=5)
     return json.loads(raw) if raw else []
 
 
-async def diagnose_table(ws):
-    """시작 시 테이블 구조 진단 — 컬럼 인덱스 확인용"""
-    raw = await _eval(ws, f"""JSON.stringify(
-    (function(){{
-        var allRows = Array.from(document.querySelectorAll('table tbody tr'));
-        var row = allRows.find(function(tr){{
-            return tr.querySelectorAll('td').length >= {MIN_COLS};
-        }});
-        if (!row) return null;
-        var tds = row.querySelectorAll('td');
-        var cols = [];
-        for (var i = 0; i < tds.length; i++) {{
-            cols.push(i + ':' + (tds[i].innerText || '').trim().slice(0, 10));
-        }}
-        return cols;
-    }})()
-)""", cmd_id=6)
-    if raw:
-        cols = json.loads(raw)
-        print(f"  테이블 컬럼: {' | '.join(cols)}")
-
-
 # ── 1건 처리 ─────────────────────────────────────────────────────────────────
+
+async def close_tooltip(ws):
+    """열린 tooltipster 닫기"""
+    await _eval(ws, """(function(){
+    var cls = document.querySelector('.tooltip-close');
+    if (cls) { cls.click(); return; }
+    var tip = document.querySelector('.tooltipster-base');
+    if (tip) tip.style.display = 'none';
+})()""", cmd_id=9)
+
 
 async def process_row(main_tab, row_idx, name, known_ids):
     sdir = find_balsong_dir(name)
@@ -134,59 +119,47 @@ async def process_row(main_tab, row_idx, name, known_ids):
         print(f"  [{name}] 파일 이미 존재 — 스킵")
         return True
 
-    # ── STEP 1: 출력(📋) 버튼 클릭 → 드롭다운 오픈 ──────────────────────────
     async with websockets.connect(main_tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
+        # 잔여 툴팁 닫기
+        await close_tooltip(ws)
+        await asyncio.sleep(0.3)
+
+        # STEP 1: 출력물 보기 버튼(ui-id-N) 클릭 → 툴팁 드롭다운 오픈
         result = await _eval(ws, f"""(function(){{
-    var allRows = Array.from(document.querySelectorAll('table tbody tr'))
-        .filter(function(tr){{ return tr.querySelectorAll('td').length >= {MIN_COLS}; }});
-    var row = allRows[{row_idx}];
-    if (!row) return 'no_row';
-    row.scrollIntoView({{block:'center', behavior:'instant'}});
-    var tds = row.querySelectorAll('td');
-    var td = tds[{PRINT_COL}];
-    if (!td) return 'no_td';
-    // 버튼/링크/이미지/span(onclick) 순서로 탐색
-    var btn = td.querySelector('button, a, input[type=button], img[onclick], span[onclick]');
-    if (!btn) {{
-        // onclick 없는 img도 시도
-        btn = td.querySelector('img');
-    }}
-    if (!btn) {{
-        // td 자체 클릭
-        td.click();
-        return 'td_click';
-    }}
+    var buttons = Array.from(document.querySelectorAll('a[id^="ui-id-"]'));
+    var btn = buttons[{row_idx}];
+    if (!btn) return 'no_btn';
+    btn.scrollIntoView({{block: 'center', behavior: 'instant'}});
     btn.click();
-    return 'clicked:' + btn.tagName;
+    return 'clicked:' + btn.id;
 }})()""", cmd_id=20)
         print(f"  출력버튼: {result}")
-        if result in ('no_row', 'no_td', None):
-            print("  출력 버튼 위치 확인 필요"); return False
+        if not result or result == 'no_btn':
+            print("  버튼 없음"); return False
 
-        # 드롭다운 애니메이션 대기
+        # 툴팁 애니메이션 대기
         await asyncio.sleep(0.8)
 
-        # ── STEP 2: 드롭다운에서 '접수증' 클릭 ──────────────────────────────
+        # STEP 2: 드롭다운에서 '접수증' 클릭
+        # 클릭 후 fnPrintDclr(...,'Y') 호출 → 새창 오픈
         result2 = await _eval(ws, """(function(){
-    // 리프 노드부터 검색 (innerText가 정확히 '접수증')
-    var all = Array.from(document.querySelectorAll('*'));
-    for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        var t  = (el.innerText || el.textContent || '').trim();
-        if (t !== '접수증') continue;
-        var r = el.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-            el.click();
-            return 'clicked:' + el.tagName + '#' + (el.id||'') + '.' + (el.className||'');
-        }
-    }
-    return 'not_found';
+    // title="접수증" 우선, 없으면 innerText "접수증" (visible 한 것만)
+    var candidates = Array.from(document.querySelectorAll('a'))
+        .filter(function(a){
+            var r = a.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            return a.getAttribute('title') === '접수증' ||
+                   (a.innerText||'').trim() === '접수증';
+        });
+    if (!candidates.length) return 'not_found';
+    candidates[0].click();
+    return 'clicked:' + (candidates[0].getAttribute('onclick') || '').slice(0, 50);
 })()""", cmd_id=21)
         print(f"  접수증 클릭: {result2}")
         if result2 == 'not_found':
-            print("  접수증 메뉴 없음 (드롭다운 미표시?)"); return False
+            print("  접수증 메뉴 없음"); return False
 
-    # ── STEP 3: OZReport 팝업 대기 (최대 20초) ───────────────────────────────
+    # STEP 3: OZReport 새창 대기 (최대 20초)
     print("  OZReport 창 대기...")
     oz_tab = None
     for _ in range(40):
@@ -198,21 +171,18 @@ async def process_row(main_tab, row_idx, name, known_ids):
         for t in tabs:
             if t["id"] not in known_ids and t.get("type") == "page":
                 url = t.get("url", "")
-                # ozhJsonviewer.oz OR wetax 내 rpt/viewer 경로
-                if "ozhJsonviewer" in url or (
-                        "wetax.go.kr" in url and ("rpt" in url or "viewer" in url)):
+                if "wetax.go.kr" in url and ("rpt" in url or "ozhJson" in url or "viewer" in url):
                     oz_tab = t
                     break
         if oz_tab:
             break
 
     if not oz_tab:
-        print("  OZReport 창 미감지 — 수동으로 확인 후 재시도")
-        return False
+        print("  OZReport 창 미감지"); return False
     known_ids.add(oz_tab["id"])
     print(f"  OZReport: {oz_tab['url'][:70]}")
 
-    # ── STEP 4: readyState 대기 + OZ 렌더링 대기 + Page.printToPDF ──────────
+    # STEP 4: readyState 완료 + OZ 렌더링 대기 + Page.printToPDF
     pdf_bytes = None
     try:
         async with websockets.connect(oz_tab["webSocketDebuggerUrl"], ping_interval=None) as ws_oz:
@@ -223,15 +193,14 @@ async def process_row(main_tab, row_idx, name, known_ids):
                     break
                 await asyncio.sleep(0.5)
 
-            # OZ 리포트 렌더링 추가 대기
+            # OZ 렌더링 추가 대기
             print("  OZ 렌더링 대기 (5초)...")
             await asyncio.sleep(5)
 
-            # Page.printToPDF
             print("  Page.printToPDF 실행...")
             r = await _send(ws_oz, {"id": 50, "method": "Page.printToPDF", "params": {
                 "printBackground": True,
-                "paperWidth":  8.27,    # A4 세로
+                "paperWidth":  8.27,    # A4
                 "paperHeight": 11.69,
                 "marginTop":    0.4,
                 "marginBottom": 0.4,
@@ -246,7 +215,7 @@ async def process_row(main_tab, row_idx, name, known_ids):
                 pdf_bytes = base64.b64decode(data_b64)
                 print(f"  PDF {len(pdf_bytes)//1024}KB 생성")
             else:
-                print(f"  Page.printToPDF 응답 없음: {r.get('result',{})}")
+                print(f"  printToPDF 응답 없음: {r.get('result', {})}")
     except Exception as e:
         print(f"  PDF 생성 오류: {e}")
         traceback.print_exc()
@@ -259,9 +228,9 @@ async def process_row(main_tab, row_idx, name, known_ids):
     await asyncio.sleep(0.5)
 
     if not pdf_bytes:
-        print("  PDF bytes 없음 — 스킵"); return False
+        print("  PDF bytes 없음"); return False
 
-    # ── STEP 5: 저장 ─────────────────────────────────────────────────────────
+    # STEP 5: 저장
     archive_if_exists(dst)
     with open(dst, "wb") as f:
         f.write(pdf_bytes)
@@ -273,25 +242,22 @@ async def process_row(main_tab, row_idx, name, known_ids):
 # ── 다음 페이지 ───────────────────────────────────────────────────────────────
 
 async def click_next_page(main_tab):
-    """위택스 다음 페이지 버튼 JS 클릭"""
+    """현재 active 페이지 다음 번호 클릭. 없으면 None 반환."""
     async with websockets.connect(main_tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
         result = await _eval(ws, """(function(){
-    var all = Array.from(document.querySelectorAll('a, button, input, span, img'));
-    for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        var t = (el.innerText || el.value || el.textContent || '').trim();
-        var lbl = (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
-        var r = el.getBoundingClientRect();
-        // 하단 절반에 있는 '다음' 계열 버튼
-        if (r.width > 0 && r.height > 0 && r.top > window.innerHeight * 0.4) {
-            if (t === '다음' || t === '>' || t === '다음페이지' ||
-                    lbl.indexOf('다음') >= 0) {
-                el.click();
-                return 'clicked:' + (t || lbl);
-            }
-        }
+    // a[href="#n"] 목록 — 페이지 번호 링크
+    var pages = Array.from(document.querySelectorAll('a[href="#n"]'))
+        .filter(function(a){
+            var r = a.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        });
+    var activeIdx = -1;
+    for (var i = 0; i < pages.length; i++){
+        if (pages[i].classList.contains('active')){ activeIdx = i; break; }
     }
-    return null;
+    if (activeIdx < 0 || activeIdx >= pages.length - 1) return null;
+    pages[activeIdx + 1].click();
+    return 'page_' + (activeIdx + 2);
 })()""", cmd_id=40)
     return result
 
@@ -308,15 +274,10 @@ async def run():
                  and t.get("type") == "page"), None)
     if not main:
         print("위택스 탭 없음!")
-        print("  → 위택스(https://www.wetax.go.kr) 열고 지방소득세 신고내역 조회 후 재실행")
+        print("  → https://www.wetax.go.kr 에서 지방소득세 신고내역 조회 후 재실행")
         return
 
     print(f"탭 발견: {main['url'][:90]}")
-
-    # 테이블 구조 진단 (컬럼 인덱스 확인)
-    print("테이블 구조 진단...")
-    async with websockets.connect(main["webSocketDebuggerUrl"], ping_interval=None) as ws:
-        await diagnose_table(ws)
 
     known_ids  = set(t["id"] for t in tabs)
     page_num   = 1
