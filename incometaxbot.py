@@ -112,14 +112,14 @@ def update_airtable_접수완료(name: str):
             return
         record_id = records[0]["id"]
         url2 = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/{AIRTABLE_TABLE}/{record_id}"
-        body = _json.dumps({"fields": {"자동회신": "접수완료"}}, ensure_ascii=False).encode("utf-8")
+        body = _json.dumps({"fields": {"자동회신": "진짜접수완료"}}, ensure_ascii=False).encode("utf-8")
         req2 = urllib.request.Request(url2, data=body, headers={
             "Authorization": f"Bearer {pat}",
             "Content-Type":  "application/json",
         }, method="PATCH")
         with urllib.request.urlopen(req2, timeout=10) as r:
             r.read()
-        logger.info("에어테이블 %s 자동회신=접수완료", name)
+        logger.info("에어테이블 %s 자동회신=진짜접수완료", name)
     except Exception as e:
         logger.error("에어테이블 업데이트 실패: %s", e)
 
