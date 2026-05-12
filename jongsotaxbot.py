@@ -35,7 +35,8 @@ from config import CUSTOMER_DIR as NAS_BASE
 from print_sheet import nfc_glob
 
 # ===== 설정 =====
-TOKEN          = "REDACTED_TOKEN_1"
+from config_secret import JONGSOTAX_BOT_TOKEN
+TOKEN          = JONGSOTAX_BOT_TOKEN
 ADMIN_CHAT_ID  = 5980411081    # 세무사 (관리자)
 NAS_URL        = "https://nas.taxenglab.com/종소세2026/고객"    # Cloudflare URL
 

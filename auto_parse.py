@@ -23,7 +23,8 @@ TOKEN_FILE     = CRED_DIR / "token.pickle"
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 SHEET_NAME     = "접수명단"
 NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")
-TELEGRAM_TOKEN = "REDACTED_TOKEN_2"
+from config_secret import AUTO_PARSE_BOT_TOKEN
+TELEGRAM_TOKEN = AUTO_PARSE_BOT_TOKEN
 ADMIN_CHAT_ID  = "5980411081"
 LOCK_DIR       = Path.home() / "종소세2026/.parse_locks"
 SEEN_FILE      = Path.home() / "종소세2026/.parse_locks/seen.json"  # 이미 처리/알림한 고객
