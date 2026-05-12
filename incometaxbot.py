@@ -23,7 +23,8 @@ from gsheet_writer import get_credentials
 import gspread
 
 # ===== 설정 =====
-TOKEN          = "REDACTED_TOKEN_2"
+from config_secret import AUTO_PARSE_BOT_TOKEN
+TOKEN          = AUTO_PARSE_BOT_TOKEN
 SPREADSHEET_ID = "1oh31k00Oa2lZWvu5fnBRVmurdlll1YEG8Fefi5FRfBI"
 NAS_BASE       = Path("/Users/changmini/NAS/종소세2026/고객")
 SEASON_END     = date(2026, 6, 1)
