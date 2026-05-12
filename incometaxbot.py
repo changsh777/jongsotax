@@ -79,6 +79,51 @@ def has_pdf(name: str) -> bool:
     return False
 
 
+# ===== Airtable 자동회신 업데이트 =====
+AIRTABLE_BASE  = "appSvDTDOmYfBeIFs"
+AIRTABLE_TABLE = "tbl2f2h6GfSnLCQpt"
+
+def _load_airtable_pat() -> str:
+    pat_file = Path.home() / "종소세2026/.credentials/airtable_pat.txt"
+    if pat_file.exists():
+        return pat_file.read_text().strip()
+    try:
+        from config_secret import AIRTABLE_PAT as _PAT
+        return _PAT
+    except ImportError:
+        return ""
+
+def update_airtable_접수완료(name: str):
+    """에어테이블 자동회신='접수완료' 업데이트"""
+    import urllib.request, urllib.parse, json as _json
+    pat = _load_airtable_pat()
+    if not pat:
+        logger.warning("AIRTABLE_PAT 없음 → 에어테이블 업데이트 생략")
+        return
+    try:
+        formula = urllib.parse.quote(f'{{성명}}="{name}"')
+        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/{AIRTABLE_TABLE}?filterByFormula={formula}&maxRecords=1"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {pat}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = _json.loads(r.read())
+        records = data.get("records", [])
+        if not records:
+            logger.warning("에어테이블 '%s' 레코드 없음", name)
+            return
+        record_id = records[0]["id"]
+        url2 = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/{AIRTABLE_TABLE}/{record_id}"
+        body = _json.dumps({"fields": {"자동회신": "접수완료"}}, ensure_ascii=False).encode("utf-8")
+        req2 = urllib.request.Request(url2, data=body, headers={
+            "Authorization": f"Bearer {pat}",
+            "Content-Type":  "application/json",
+        }, method="PATCH")
+        with urllib.request.urlopen(req2, timeout=10) as r:
+            r.read()
+        logger.info("에어테이블 %s 자동회신=접수완료", name)
+    except Exception as e:
+        logger.error("에어테이블 업데이트 실패: %s", e)
+
+
 # ===== Mac Mini에서 파싱 실행 =====
 def run_parse(name: str) -> str:
     try:
@@ -126,6 +171,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = m.group(1).strip()
     logger.info("접수 감지: %s", name)
     await update.message.reply_text(f"📥 {name}님 접수 확인\n구글시트 조회 중...")
+
+    # 에어테이블 자동회신 → 접수완료
+    update_airtable_접수완료(name)
 
     info = get_customer_info(name)
     if not info:
