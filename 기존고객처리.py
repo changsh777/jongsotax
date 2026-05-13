@@ -81,8 +81,9 @@ def main():
 
     wb, ws_out = ensure_output_workbook()
 
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
+    pw = sync_playwright().start()
+    try:
+        browser = pw.chromium.connect_over_cdp("http://localhost:9222")
         ctx  = browser.contexts[0]
         page = ctx.pages[0]
         page.bring_to_front()
@@ -100,6 +101,15 @@ def main():
             ])
             wb.save(r"F:\종소세2026\output\결과.xlsx")
             print(f"    → {r['status']} {r['error_msg'] or ''}\n")
+    finally:
+        try:
+            browser.disconnect()
+        except Exception:
+            pass
+        try:
+            pw.stop()
+        except Exception:
+            pass
 
     print(f"[완료] {len(customers)}명 처리")
 

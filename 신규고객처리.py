@@ -21,7 +21,8 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from 종합소득세안내문조회 import (
     ensure_output_workbook,
-    save_anneam_pdf, download_prev_income_tax,
+    save_anneam_pdf, wait_preview_button,
+    download_prev_income_tax,
     download_vat, extract_biznos,
 )
 from gsheet_writer import get_credentials
@@ -160,13 +161,9 @@ def login_hometax_id(page, hometax_id: str, hometax_pw: str, jumin_raw: str = ""
     # ID 입력
     id_el = page.locator("#mf_txppWframe_loginboxFrame_iptUserId")
     if not id_el.is_visible(timeout=10000):
-        # 이미 로그인된 상태인지 확인
-        if not page.locator("#mf_txppWframe_loginboxFrame_iptUserId").is_visible(timeout=1000):
-            if page.locator("#menuAtag_4103080000").count() > 0:
-                print(f"    [로그인] 이미 로그인 상태 - 계속 진행", flush=True)
-                return True
-        print("    [로그인] ID 입력란 못 찾음", flush=True)
-        return False
+        # 로그인 입력란 없음 = 이미 로그인된 상태 (주민번호/간편인증 등 수동 로그인 포함)
+        print(f"    [로그인] ID 입력란 없음 → 이미 로그인 상태로 간주하고 계속 진행", flush=True)
+        return True
     id_el.fill(hometax_id)
 
     # PW 입력
@@ -288,6 +285,16 @@ def process_one_신규(ctx, page, customer: dict) -> dict:
     try:
         # 개인납세자 신고도움서비스 — SPA 내부 메뉴 이동 (goto 직접 접근 시 세션 오류 발생)
         print(f"    [신고도움서비스] 메뉴 이동 중...", flush=True)
+        # 메뉴 요소가 로딩될 때까지 최대 20초 대기 (수동 로그인 후 SPA 초기화 시간 필요)
+        for _wait in range(20):
+            el = page.evaluate("() => !!document.getElementById('menuAtag_4103080000')")
+            if el:
+                break
+            print(f"    [신고도움서비스] 메뉴 대기 중... ({_wait+1}s)", flush=True)
+            time.sleep(1)
+        else:
+            result["error_msg"] = "신고도움서비스 메뉴 로딩 실패 (20초 초과)"
+            return result
         page.evaluate("document.getElementById('menuAtag_4103080000').onclick()")
         time.sleep(4)
 
@@ -297,15 +304,15 @@ def process_one_신규(ctx, page, customer: dict) -> dict:
             result["error_msg"] = "신고도움서비스 접근불가 (세션 오류 - 로그인 재확인 필요)"
             return result
 
-        # 미리보기 버튼 (개인납세자 페이지 고정 ID)
-        preview_btn = page.locator(INDIVIDUAL_PREVIEW_BTN_ID)
-        if not preview_btn.is_visible(timeout=8000):
-            # 버튼이 안 보이면 귀속년도 2025 선택 후 재시도
-            print(f"    [미리보기] 버튼 대기 중...", flush=True)
+        # 미리보기 버튼 — 텍스트 기반으로 찾기 (ID는 개인납세자/세무대리인 페이지마다 다름)
+        print(f"    [미리보기] 버튼 대기 중...", flush=True)
+        preview_btn = wait_preview_button(page, timeout_ms=10000)
+        if preview_btn is None:
             time.sleep(3)
-            if not preview_btn.is_visible(timeout=5000):
-                result["error_msg"] = "안내문 없음 (미리보기 버튼 미표시) - 신고안내 미생성 고객"
-                return result
+            preview_btn = wait_preview_button(page, timeout_ms=8000)
+        if preview_btn is None:
+            result["error_msg"] = "안내문 없음 (미리보기 버튼 미표시) - 신고안내 미생성 고객"
+            return result
 
         anneam_path = folder / f"종소세안내문_{name}.pdf"
         if not anneam_path.exists():
@@ -366,8 +373,9 @@ def main():
 
     wb, ws_out = ensure_output_workbook()
 
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
+    pw = sync_playwright().start()
+    try:
+        browser = pw.chromium.connect_over_cdp("http://localhost:9222")
         ctx  = browser.contexts[0]
         page = ctx.pages[0]
         page.bring_to_front()
@@ -385,6 +393,15 @@ def main():
             ])
             wb.save(r"F:\종소세2026\output\결과.xlsx")
             print(f"    → {r['status']} {r['error_msg'] or ''}\n")
+    finally:
+        try:
+            browser.disconnect()
+        except Exception:
+            pass
+        try:
+            pw.stop()
+        except Exception:
+            pass
 
     print(f"[완료] {len(customers)}명 처리")
 
